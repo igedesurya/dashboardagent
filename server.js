@@ -224,9 +224,14 @@ function scanCursor(now, out) {
 }
 
 // ---------- opencode ----------
-let ocDb = null, ocStmt = null, sqlite = null;
+// opencode punya dua skema database:
+//   lama  -> session + message + part   (part.data berisi satu blok)
+//   baru  -> session_v2 + session_message (satu baris = satu pesan utuh, berisi array content)
+// Kita deteksi otomatis dan pakai query yang sesuai.
+let ocDb = null, ocStmt = null, sqlite = null, ocSchema = null;
 try { sqlite = await import('node:sqlite'); } catch {}
-const OC_SQL = `
+
+const OC_SQL_V1 = `
 SELECT s.id, s.title, s.directory, s.model, s.time_created AS started,
   s.tokens_input + s.tokens_output + s.tokens_cache_read AS tokens,
   (SELECT json_object(
@@ -238,6 +243,49 @@ SELECT s.id, s.title, s.directory, s.model, s.time_created AS started,
    FROM part p WHERE p.session_id = s.id ORDER BY p.time_created DESC, p.id DESC LIMIT 1) AS last,
   (SELECT json_extract(m.data,'$.error.name') FROM message m WHERE m.session_id = s.id ORDER BY m.time_created DESC, m.id DESC LIMIT 1) AS err
 FROM session s WHERE s.parent_id IS NULL AND s.time_archived IS NULL AND s.time_updated > ?`;
+
+// Skema baru: ambil pesan terakhir (assistant/user/idle) per sesi. `agent` & `model` ikut di baris pesan.
+const OC_SQL_V2 = `
+SELECT s.id, s.title, s.directory, s.model, s.time_created AS started,
+  s.tokens_input + s.tokens_output + s.tokens_cache_read AS tokens,
+  s.time_updated AS updated,
+  (SELECT sm.type FROM session_message sm WHERE sm.session_id = s.id ORDER BY sm.seq DESC LIMIT 1) AS lastType,
+  (SELECT sm.data FROM session_message sm WHERE sm.session_id = s.id ORDER BY sm.seq DESC LIMIT 1) AS lastData,
+  (SELECT sm.data FROM session_message sm WHERE sm.session_id = s.id AND sm.type='assistant' ORDER BY sm.seq DESC LIMIT 1) AS lastAssistantData
+FROM session_v2 s WHERE s.parent_id IS NULL AND s.time_archived IS NULL AND s.time_updated > ?`;
+
+function detectOcSchema(db) {
+  const has = (table) =>
+    db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table);
+  // Pakai session_v2 hanya kalau memang ada isinya; kalau kosong, skema lama yang dipakai.
+  if (has('session_v2')) {
+    const n = db.prepare('SELECT COUNT(*) AS n FROM session_v2').get();
+    if (Number(n?.n) > 0) return 'v2';
+  }
+  return has('session') ? 'v1' : null;
+}
+
+// Ubah pesan skema baru jadi bentuk ringkas yang sama dengan `last` skema lama
+function ocV2Last(type, data) {
+  let d = {};
+  try { d = JSON.parse(data) || {}; } catch {}
+  const t = d?.time?.created ?? d?.time?.completed ?? 0;
+  if (type === 'idle') return { type: 'idle', t };
+  if (type === 'compaction') return { type: 'compaction', t };
+  const blocks = Array.isArray(d.content) ? d.content : [];
+  const tool = [...blocks].reverse().find((b) => b?.type === 'tool');
+  if (tool) {
+    const input = tool.state?.input || {};
+    return {
+      type: 'tool', tool: tool.name, status: tool.state?.status,
+      command: input.command, description: input.description, filePath: input.filePath,
+      path: input.path, pattern: input.pattern, url: input.url, t,
+    };
+  }
+  // tidak ada tool: assistant yang sudah selesai = berpikir/merangkum jawaban
+  return { type: 'text', t, agent: d.agent, model: d.model?.id, error: d.error?.message || d.error?.name };
+}
+
 function opencodeState(l, err, age) {
   if (err && age < 10 * MIN) return { state: 'error', task: clip(err), tool: '—' };
   if (l.type === 'tool') {
@@ -254,22 +302,47 @@ function scanOpencode(now, out) {
   try {
     if (!ocDb) {
       ocDb = new sqlite.DatabaseSync(OPENCODE_DB, { readOnly: true });
-      ocStmt = ocDb.prepare(OC_SQL);
+      ocSchema = detectOcSchema(ocDb);
+      if (ocSchema === 'v2') ocStmt = ocDb.prepare(OC_SQL_V2);
+      else if (ocSchema === 'v1') ocStmt = ocDb.prepare(OC_SQL_V1);
+      else ocStmt = null;
     }
-    for (const r of ocStmt.all(now - WINDOW)) {
-      if (!r.last) continue;
-      const l = JSON.parse(r.last);
-      let model = '—';
-      try { model = JSON.parse(r.model).id || model; } catch {}
-      out.push({
-        id: 'opencode:' + r.id, source: 'opencode', ...opencodeState(l, r.err, now - (l.t || 0)),
-        model, project: path.basename(r.directory || '') || '—',
-        tokens: Number(r.tokens) || null, started: Number(r.started), updated: Number(l.t) || now,
-      });
+    if (!ocStmt) return;
+    if (ocSchema === 'v2') {
+      for (const r of ocStmt.all(now - WINDOW)) {
+        if (!r.lastData) continue;
+        const l = ocV2Last(r.lastType, r.lastData);
+        // error dari pesan assistant terakhir (lastData bisa berupa idle/user, bukan assistant)
+        let err = null;
+        try {
+          const d = JSON.parse(r.lastAssistantData || 'null');
+          err = d?.error?.message || d?.error?.name || null;
+        } catch {}
+        let model = '—';
+        try { model = JSON.parse(r.model).id || model; } catch {}
+        const age = now - (l.t || r.updated || now);
+        out.push({
+          id: 'opencode:' + r.id, source: 'opencode', ...opencodeState(l, err, age),
+          model, project: path.basename(r.directory || '') || '—',
+          tokens: Number(r.tokens) || null, started: Number(r.started), updated: Number(l.t || r.updated) || now,
+        });
+      }
+    } else {
+      for (const r of ocStmt.all(now - WINDOW)) {
+        if (!r.last) continue;
+        const l = JSON.parse(r.last);
+        let model = '—';
+        try { model = JSON.parse(r.model).id || model; } catch {}
+        out.push({
+          id: 'opencode:' + r.id, source: 'opencode', ...opencodeState(l, r.err, now - (l.t || 0)),
+          model, project: path.basename(r.directory || '') || '—',
+          tokens: Number(r.tokens) || null, started: Number(r.started), updated: Number(l.t) || now,
+        });
+      }
     }
   } catch {
     try { ocDb?.close(); } catch {}
-    ocDb = ocStmt = null; // coba buka lagi di putaran berikutnya
+    ocDb = ocStmt = null; ocSchema = null; // coba buka lagi di putaran berikutnya
   }
 }
 
