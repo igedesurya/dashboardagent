@@ -135,11 +135,12 @@
   <div id="stage"></div>
 
   <header class="topbar">
-    <div class="hud brand"><span class="logo">🏢</span><div><h1>Agent HQ</h1><small id="mode">memuat…</small></div></div>
+    <div class="hud brand"><span class="logo">🏢</span><div><h1 data-i18n="app.title">Agent HQ</h1><small id="mode" data-i18n="app.loading">memuat…</small></div></div>
     <div class="hud" id="stats"></div>
-    <div class="hud clockbox"><span id="clock">--:--</span><button id="timeBtn">🕑 Otomatis</button>
-      <label class="winbox" title="Rentang waktu agent yang ditampilkan"><span>⏱️</span>
-        <select id="windowSelect" aria-label="Rentang waktu">
+    <div class="hud clockbox"><span id="clock">--:--</span><button id="timeBtn">🕑 <span data-i18n="hud.clockAuto">Otomatis</span></button>
+      <button id="langBtn" title="Language / Bahasa">🇮🇩 ID</button>
+      <label class="winbox" data-i18n-title="hud.tooltip.window" title="Rentang waktu agent yang ditampilkan"><span>⏱️</span>
+        <select id="windowSelect" data-i18n-aria="hud.windowLabel" aria-label="Rentang waktu">
           <option value="60">1 jam</option>
           <option value="360">6 jam</option>
           <option value="1440" selected>24 jam</option>
@@ -148,20 +149,23 @@
           <option value="43200">30 hari</option>
         </select>
       </label>
-      <button id="panelBtn" title="Daftar agent (A)">👥 <b id="count"></b></button><button id="fsBtn" title="Layar penuh">⛶</button></div>
+      <button id="panelBtn" data-i18n-title="hud.tooltip.agents" title="Daftar agent (A)">👥 <b id="count"></b></button><button id="fsBtn" data-i18n-title="hud.tooltip.fullscreen" title="Layar penuh">⛶</button></div>
   </header>
 
   <aside class="hud" id="panel">
-    <h2>Agent</h2>
+    <h2 data-i18n="panel.title">Agent</h2>
     <ul id="agentList"></ul>
     <div class="legend">
-      <span>💻 Ruang kerja = ngoding / berpikir</span><span>⚙️ Server = jalanin command</span>
-      <span>📖 Perpustakaan = baca/cari</span><span>✋ Rapat = nunggu kamu</span>
-      <span>🌳 Taman / 🏖️ Kafe & Kolam / ⚽ Lapangan = santai</span><span>🚑 Klinik = error</span>
+      <span>💻 <span data-i18n="zone.desk">Ruang kerja = ngoding / berpikir</span></span>
+      <span>⚙️ <span data-i18n="zone.server">Server = jalanin command</span></span>
+      <span>📖 <span data-i18n="zone.library">Perpustakaan = baca/cari</span></span>
+      <span>✋ <span data-i18n="zone.meeting">Rapat = nunggu kamu</span></span>
+      <span>🌳 <span data-i18n="zone.leisure">Taman / Kafe & Kolam / Lapangan = santai</span></span>
+      <span>🚑 <span data-i18n="zone.clinic">Klinik = error</span></span>
     </div>
   </aside>
 
-  <section class="hud" id="feed"><h3>Aktivitas</h3><ul id="feedList"></ul></section>
+  <section class="hud" id="feed"><h3 data-i18n="hud.activity">Aktivitas</h3><ul id="feedList"></ul></section>
 
   <div class="hud hidden" id="card"><button class="x" aria-label="Tutup">✕</button><div class="body"></div></div>
 

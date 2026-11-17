@@ -4,6 +4,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { buildWorld, HUB, DOOR } from './world.js';
 import { Agent, AGENTS, STATES, SOURCES, lookFor } from './agents.js';
+import { initI18n, lang, setLang, onLangChange, t, applyStatic, stateLabel } from './i18n.js';
+initI18n();
 
 await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]);
 
@@ -133,26 +135,39 @@ const FILES = {
   'mobile-app': ['lib/home_screen.dart', 'lib/api.dart', 'pubspec.yaml'],
   'data-pipeline': ['etl/load.sql', 'etl/transform.py', 'dags/daily.py'],
 };
-const TASKS = {
-  coding: (f) => [`mengedit ${f}`, `menulis ${f}`, `refactor ${f}`, `memperbaiki bug di ${f}`],
+function buildTasks() {
+  return {
+  coding: (f) => [
+    t('task.edit', { f }), t('task.write', { f }), t('task.refactor', { f }), t('task.fix', { f }),
+  ],
   running: () => ['npm test', 'pnpm build', 'pytest -q', 'git status', 'docker compose up', 'tsc --noEmit', 'python main.py'],
-  reading: (f) => [`membaca ${f}`, 'mencari "TODO" di repo', 'membaca dokumentasi API', 'grep "handleSubmit"', 'membaca README.md'],
-  waiting: () => ['minta izin: rm -rf dist/', 'tanya: Postgres atau SQLite?', 'minta izin: git push origin main', 'butuh API key baru', 'minta izin: npm install zod'],
-  error: () => ['TypeError: cannot read "id"', '429 Too Many Requests', '3 dari 42 test gagal', 'Koneksi timeout ke API', 'SyntaxError di baris 88'],
-};
-const IDLE_TASK = {
-  coffee: 'ngopi sambil nunggu tugas',
-  fish: 'memancing, tugas selesai ✓',
-  nap: 'tidur siang… zzz',
-  cafe: 'nongkrong di kafe ☕',
-  swim: 'berenang bolak-balik 🏊',
-  float: 'mengapung pakai ban 🛟',
-  sun: 'berjemur di pinggir kolam 😎',
-  soccer: 'main bola ⚽',
-  jog: 'lari keliling lapangan 🏃',
-  hoops: 'latihan basket 🏀',
-  yoga: 'yoga, tarik napas… 🧘',
-};
+  reading: (f) => [
+    t('task.read', { f }), t('task.searchTodo'), t('task.readDocs'), t('task.grep'), t('task.readme'),
+  ],
+  waiting: () => [
+    t('task.permitRm'), t('task.askDb'), t('task.permitPush'), t('task.needKey'), t('task.permitInstall'),
+  ],
+  error: () => [t('task.errType'), t('task.err429'), t('task.errTests'), t('task.errTimeout'), t('task.errSyntax')],
+  };
+}
+let TASKS = buildTasks();
+
+function buildIdleTasks() {
+  return {
+  coffee: t('idle.coffee'),
+  fish: t('idle.fish'),
+  nap: t('idle.nap'),
+  cafe: t('idle.cafe'),
+  swim: t('idle.swim'),
+  float: t('idle.float'),
+  sun: t('idle.sun'),
+  soccer: t('idle.soccer'),
+  jog: t('idle.jog'),
+  hoops: t('idle.hoops'),
+  yoga: t('idle.yoga'),
+  };
+}
+let IDLE_TASK = buildIdleTasks();
 const WEIGHTS = { coding: 30, running: 18, reading: 18, waiting: 9, idle: 20, error: 5 };
 
 function nextState(cur) {
@@ -195,7 +210,7 @@ function place(agent, state, task, { teleport = false, prefer = null, tool } = {
   const from = agent.spot;
   if (from) from.by = null;
   spot.by = agent.def.id;
-  agent.setState(state, task ?? IDLE_TASK[spot.action] ?? STATES[state].label, spot, teleport ? [] : route(from, spot), teleport, tool);
+  agent.setState(state, task ?? IDLE_TASK[spot.action] ?? stateLabel(state), spot, teleport ? [] : route(from, spot), teleport, tool);
   return true;
 }
 function refresh(agent) {
@@ -255,11 +270,11 @@ let targetZoom = null;
 const hhmm = (d = new Date()) => d.toTimeString().slice(0, 5);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const srcBadge = (s) => `<span class="src-badge ${SOURCES[s] ? s : 'other'}">${SOURCES[s]?.label || esc(s)}</span>`;
-const pill = (st) => `<span class="pill" style="--c:${STATES[st].color}">${STATES[st].icon} ${STATES[st].label}</span>`;
+const pill = (st) => `<span class="pill" style="--c:${STATES[st].color}">${STATES[st].icon} ${esc(stateLabel(st))}</span>`;
 
 function renderList() {
   if (!agents.length) {
-    listEl.innerHTML = '<li class="empty">Belum ada agent aktif.<br>Jalankan Claude Code, Cursor, atau opencode — mereka akan muncul di gerbang.</li>';
+    listEl.innerHTML = `<li class="empty">${t('panel.empty')}<br>${t('panel.emptyHint')}</li>`;
     return;
   }
   listEl.innerHTML = agents
@@ -280,7 +295,7 @@ function renderStats() {
   const count = Object.fromEntries(Object.keys(STATES).map((k) => [k, 0]));
   for (const a of agents) count[a.state]++;
   statsEl.innerHTML = Object.entries(STATES)
-    .map(([k, s]) => `<span class="chip ${k === 'waiting' && count[k] ? 'pulse' : ''}" title="${s.label}" style="--c:${s.color}">${s.icon} <b>${count[k]}</b></span>`)
+    .map(([k, s]) => `<span class="chip ${k === 'waiting' && count[k] ? 'pulse' : ''}" title="${esc(stateLabel(k))}" style="--c:${s.color}">${s.icon} <b>${count[k]}</b></span>`)
     .join('');
   $('#count').textContent = agents.length;
 }
@@ -292,9 +307,12 @@ function pushFeed(a) {
   while (feedEl.children.length > 7) feedEl.lastChild.remove();
 }
 
+function langTag() {
+  return lang() === 'id' ? 'id-ID' : 'en-US';
+}
 function fmtDur(ms) {
   const m = Math.floor(ms / 60000);
-  return m >= 60 ? `${Math.floor(m / 60)} j ${m % 60} m` : `${m} m`;
+  return m >= 60 ? t('dur.hm', { h: Math.floor(m / 60), m: m % 60 }) : t('dur.m', { m });
 }
 function renderCard() {
   if (!selected) return card.classList.add('hidden');
@@ -303,17 +321,17 @@ function renderCard() {
   card.querySelector('.body').innerHTML = `
     <div class="card-head"><span class="av big" style="--c:${a.def.color}">${esc(a.def.name[0])}</span>
       <div><h3>${esc(a.def.name)}</h3>${srcBadge(a.def.source)}</div></div>
-    <div class="state-line">${pill(a.state)}${a.walking ? '<span class="walking">🚶 sedang berjalan…</span>' : ''}</div>
+    <div class="state-line">${pill(a.state)}${a.walking ? `<span class="walking">🚶 ${esc(t("card.walking"))}</span>` : ''}</div>
     <dl>
-      <dt>Tugas</dt><dd>${esc(a.task)}</dd>
-      <dt>Tool terakhir</dt><dd><code>${esc(a.tool)}</code></dd>
-      <dt>Model</dt><dd>${esc(a.def.model)}</dd>
-      <dt>Proyek</dt><dd>${esc(a.def.project)}</dd>
-      <dt>Token</dt><dd>${a.tokens ? a.tokens.toLocaleString('id-ID') : '—'}</dd>
-      <dt>Aktif</dt><dd>${fmtDur(Date.now() - a.since)}</dd>
+      <dt>${esc(t("card.task"))}</dt><dd>${esc(a.task)}</dd>
+      <dt>${esc(t("card.tool"))}</dt><dd><code>${esc(a.tool)}</code></dd>
+      <dt>${esc(t("card.model"))}</dt><dd>${esc(a.def.model)}</dd>
+      <dt>${esc(t("card.project"))}</dt><dd>${esc(a.def.project)}</dd>
+      <dt>${esc(t("card.tokens"))}</dt><dd>${a.tokens ? a.tokens.toLocaleString(langTag()) : '—'}</dd>
+      <dt>${esc(t("card.active"))}</dt><dd>${fmtDur(Date.now() - a.since)}</dd>
     </dl>
-    <div class="actions"><button disabled>💬 Kirim pesan</button><button disabled>📜 Lihat log</button></div>
-    <p class="hint">${live ? 'Kirim pesan & log belum tersedia (dashboard hanya membaca).' : 'Mode demo: data palsu.'}</p>`;
+    <div class="actions"><button disabled>💬 ${esc(t("card.send"))}</button><button disabled>📜 ${esc(t("card.log"))}</button></div>
+    <p class="hint">${live ? t('card.hint') : t('app.demoSub')}</p>`;
 }
 card.querySelector('.x').addEventListener('click', () => select(null));
 
@@ -360,21 +378,34 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 });
 
 // Mode waktu
-const MODES = [
-  ['Otomatis', null],
-  ['Siang', 13],
-  ['Senja', 17.3],
-  ['Malam', 22],
-];
+const MODE_HOURS = [null, 13, 17.3, 22];
+const MODE_KEYS = ['auto', 'day', 'dusk', 'night'];
+function modeLabel(i) {
+  const key = MODE_KEYS[i];
+  return t('hud.clock' + key.charAt(0).toUpperCase() + key.slice(1));
+}
 let mode = 0;
 const timeBtn = $('#timeBtn');
 timeBtn.addEventListener('click', () => {
-  mode = (mode + 1) % MODES.length;
-  timeBtn.textContent = '🕑 ' + MODES[mode][0];
+  mode = (mode + 1) % MODE_KEYS.length;
+  timeBtn.textContent = '🕑 ' + modeLabel(mode);
   tickClock();
 });
 
 // ---------- Jendela waktu (berapa lama agent tetap ditampilkan) ----------
+const WINDOW_OPTION_LABELS = {
+  id: { 60: '1 jam', 360: '6 jam', 1440: '24 jam', 4320: '3 hari', 10080: '7 hari', 43200: '30 hari' },
+  en: { 60: '1 hour', 360: '6 hours', 1440: '24 hours', 4320: '3 days', 10080: '7 days', 43200: '30 days' },
+};
+function updateWindowOptions() {
+  if (!windowSelect) return;
+  const labels = WINDOW_OPTION_LABELS[lang()] || WINDOW_OPTION_LABELS.id;
+  for (const opt of windowSelect.options) {
+    const v = +opt.value;
+    if (labels[v]) opt.textContent = labels[v];
+    else if (!opt.dataset.custom) opt.textContent = t('window.minutes', { n: v });
+  }
+}
 const windowSelect = $('#windowSelect');
 const windowBox = windowSelect?.closest('.winbox');
 const WINDOW_LS_KEY = 'agent-hq-window-min';
@@ -384,7 +415,7 @@ async function applyWindowMin(min, { persist = true } = {}) {
   // kalau nilainya tidak ada di daftar, tambahkan option
   if (![...windowSelect.options].some((o) => o.value === min)) {
     const opt = document.createElement('option');
-    opt.value = min; opt.textContent = `${min} mnt`;
+    opt.value = min; opt.textContent = t('window.minutes', { n: min }); opt.dataset.custom = '1';
     windowSelect.appendChild(opt);
   }
   windowSelect.value = min;
@@ -417,7 +448,7 @@ windowSelect?.addEventListener('change', () => applyWindowMin(windowSelect.value
 function tickClock() {
   const d = new Date();
   $('#clock').textContent = hhmm(d);
-  applyTime(MODES[mode][1] ?? d.getHours() + d.getMinutes() / 60);
+  applyTime(MODE_HOURS[mode] ?? d.getHours() + d.getMinutes() / 60);
 }
 setInterval(() => {
   tickClock();
@@ -425,6 +456,30 @@ setInterval(() => {
   if (selected) renderCard();
 }, 1000);
 tickClock();
+
+// ---------- Bahasa (ID / EN) ----------
+const langBtn = $('#langBtn');
+function renderLangBtn() {
+  if (!langBtn) return;
+  const isId = lang() === 'id';
+  langBtn.textContent = isId ? '\u{1F1EE}\u{1F1E9} ID' : '\u{1F1EC}\u{1F1E7} EN';
+  langBtn.title = isId ? 'Ganti ke English' : 'Switch to Bahasa Indonesia';
+}
+langBtn?.addEventListener('click', () => setLang(lang() === 'id' ? 'en' : 'id'));
+onLangChange(() => {
+  TASKS = buildTasks();
+  IDLE_TASK = buildIdleTasks();
+  applyStatic();
+  updateWindowOptions();
+  renderLangBtn();
+  timeBtn.textContent = '\u{1F551} ' + modeLabel(mode);
+  renderList();
+  renderStats();
+  if (selected) renderCard();
+});
+renderLangBtn();
+applyStatic();
+updateWindowOptions();
 
 // Panel agent (laci) & layar penuh
 const panelBtn = $('#panelBtn');
@@ -444,7 +499,7 @@ addEventListener('keydown', (e) => {
 // Sumber data: server live kalau ada, kalau tidak (atau ?demo) pakai simulator
 const modeEl = $('#mode');
 function startDemo() {
-  modeEl.textContent = 'demo · data palsu';
+  modeEl.textContent = t('app.demo');
   AGENTS.forEach(addAgent);
   [
     ['coding'], ['running'], ['idle', 'swim'], ['waiting'], ['idle', 'cafe'], ['idle', 'float'],
@@ -457,13 +512,13 @@ try {
   if (!r.ok) throw 0;
   live = true;
   applySnapshot(await r.json());
-  modeEl.innerHTML = '<i class="live"></i>live';
+  modeEl.innerHTML = '<i class="live"></i>' + t('app.live');
   const es = new EventSource('/api/stream');
   es.onmessage = (e) => {
-    modeEl.innerHTML = '<i class="live"></i>live';
+    modeEl.innerHTML = '<i class="live"></i>' + t('app.live');
     applySnapshot(JSON.parse(e.data));
   };
-  es.onerror = () => (modeEl.textContent = 'terputus, mencoba lagi…');
+  es.onerror = () => (modeEl.textContent = t('app.disconnected'));
 } catch {
   startDemo();
 }
