@@ -77,16 +77,16 @@ export function buildWorld(scene) {
   scene.add(g);
 
   const zones = {
-    desk:    { label: 'Ruang Kerja',  icon: '💻', area: 'in',  entry: [{ x: -13.5, z: -1 }], spots: [], labelPos: [-13.5, -9.3] },
-    meeting: { label: 'Ruang Rapat',  icon: '✋', area: 'in',  entry: [{ x: -7.2, z: -7.8 }, { x: -7.2, z: -2 }], spots: [], labelPos: [-4.5, -3.2] },
-    server:  { label: 'Ruang Server', icon: '⚙️', area: 'in',  entry: [], spots: [], labelPos: [-13.5, 1.2] },
-    library: { label: 'Perpustakaan', icon: '📖', area: 'in',  entry: [{ x: -1.2, z: 8.6 }, { x: -1.2, z: 1 }], spots: [], labelPos: [-4.5, 1.3] },
-    garden:  { label: 'Taman',        icon: '🌳', area: 'out', entry: [], spots: [], labelPos: [10, 11] },
-    clinic:  { label: 'Klinik',       icon: '🚑', area: 'out', entry: [], spots: [], labelPos: [18.3, -8.6] },
-    resort:  { label: 'Kafe & Kolam', icon: '🏖️', area: 'out', entry: [{ x: 23.5, z: 0 }], spots: [],
-               labels: [['☕ Kafe', 29.5, -3.9], ['🏊 Kolam Renang', 29.5, 11.6]] },
-    sports:  { label: 'Lapangan',     icon: '⚽', area: 'out', entry: [{ x: 5.5, z: 16.2 }, { x: 5.5, z: 12 }], spots: [],
-               labels: [['⚽ Lapangan Bola', 13.5, 31.6], ['🏀 Basket', 28, 25.6], ['🧘 Yoga', 28, 30.6]] },
+    desk:    { label: 'zoneName.desk',  icon: '💻', area: 'in',  entry: [{ x: -13.5, z: -1 }], spots: [], labelPos: [-13.5, -9.3] },
+    meeting: { label: 'zoneName.meeting', icon: '✋', area: 'in',  entry: [{ x: -7.2, z: -7.8 }, { x: -7.2, z: -2 }], spots: [], labelPos: [-4.5, -3.2] },
+    server:  { label: 'zoneName.server',  icon: '⚙️', area: 'in',  entry: [], spots: [], labelPos: [-13.5, 1.2] },
+    library: { label: 'zoneName.library', icon: '📖', area: 'in',  entry: [{ x: -1.2, z: 8.6 }, { x: -1.2, z: 1 }], spots: [], labelPos: [-4.5, 1.3] },
+    garden:  { label: 'zoneName.garden',  icon: '🌳', area: 'out', entry: [], spots: [], labelPos: [10, 11] },
+    clinic:  { label: 'zoneName.clinic',  icon: '🚑', area: 'out', entry: [], spots: [], labelPos: [18.3, -8.6] },
+    resort:  { label: 'zoneName.resort',  icon: '🏖️', area: 'out', entry: [{ x: 23.5, z: 0 }], spots: [],
+               labels: [['spot.cafe', 29.5, -3.9], ['spot.pool', 29.5, 11.6]] },
+    sports:  { label: 'zoneName.sports',  icon: '⚽', area: 'out', entry: [{ x: 5.5, z: 16.2 }, { x: 5.5, z: 12 }], spots: [],
+               labels: [['spot.soccer', 13.5, 31.6], ['spot.basket', 28, 25.6], ['spot.yoga', 28, 30.6]] },
   };
   const spot = (zone, s) => {
     Object.assign(s, { zone, area: zones[zone].area, by: null, active: false });

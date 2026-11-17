@@ -95,11 +95,13 @@ function applyTime(h) {
 }
 
 // ---------- Label zona ----------
-for (const z of Object.values(world.zones)) {
-  for (const [text, x, zz] of z.labels || [[`${z.icon} ${z.label}`, ...z.labelPos]]) {
+for (const [zoneKey, z] of Object.entries(world.zones)) {
+  const items = z.labels || [[z.label, ...z.labelPos]];
+  for (const [textKey, x, zz] of items) {
     const el = document.createElement('div');
     el.className = 'zone-label';
-    el.textContent = text;
+    el.dataset.i18n = textKey;
+    el.textContent = t(textKey);
     const o = new CSS2DObject(el);
     o.position.set(x, 0.1, zz);
     scene.add(o);
