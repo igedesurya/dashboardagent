@@ -1,0 +1,22 @@
+# Jalankan:  docker compose up -d --build
+# Buka:      http://localhost:5173
+#
+# Semua folder data dipasang read-only: container hanya membaca, tidak pernah mengubah
+# data Claude, Cursor, opencode, atau Grok Bot di Mac kamu.
+services:
+  agent-hq:
+    build: .
+    image: agent-hq:latest
+    container_name: agent-hq
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:5173" # hanya bisa diakses dari Mac ini
+    environment:
+      HOST_USER: ${USER}             # untuk merapikan nama proyek Cursor
+      WINDOW_MIN: ${WINDOW_MIN:-1440} # jendela waktu agent (menit), bawaan 24 jam
+      TZ: ${TZ:-Asia/Jakarta}
+    volumes:
+      - ${HOME}/.claude/projects:/data/claude:ro
+      - ${HOME}/.cursor/projects:/data/cursor:ro
+      - ${HOME}/.local/share/opencode:/data/opencode:ro
+      - ${HOME}/Library/Application Support/Grok Bot/sand-client-persistence:/data/grok:ro
