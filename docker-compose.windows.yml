@@ -1,0 +1,25 @@
+# Windows (Docker Desktop). Jalankan:
+#   docker compose -f docker-compose.windows.yml up -d --build
+#
+# Sesuaikan path di bawah kalau data agent kamu ada di lokasi lain.
+services:
+  agent-hq:
+    build: .
+    image: agent-hq:latest
+    container_name: agent-hq
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      HOST_USER: ${USERNAME}
+      WINDOW_MIN: ${WINDOW_MIN:-1440}
+      TZ: ${TZ:-Asia/Jakarta}
+      CLAUDE_DIR: /data/claude
+      CURSOR_DIR: /data/cursor
+      OPENCODE_DB: /data/opencode/opencode.db
+    volumes:
+      # Pakai forward slash; Docker Desktop menerima path Windows dengan "/".
+      - ${USERPROFILE}/.claude/projects:/data/claude:ro
+      - ${USERPROFILE}/.cursor/projects:/data/cursor:ro
+      - ${USERPROFILE}/.local/share/opencode:/data/opencode:ro
+      # Grok Bot tidak tersedia di Windows -> tidak di-mount.

@@ -349,6 +349,8 @@ function scanOpencode(now, out) {
 // ---------- Aplikasi Grok Bot (cache lokal, hanya baca) ----------
 // Aplikasi menyimpan daftar bot ("roster") dan transkrip tiap bot sebagai JSON.
 // Nama file = base32 dari kuncinya. Isi pesan tidak pernah dikirim ke dashboard.
+// Grok Bot hanya ada di macOS. Di Linux/Windows env GROK_DIR biasanya tidak diisi,
+// jadi folder ini tidak akan ditemukan dan scanGrokApp() langsung berhenti tanpa error.
 const GROK_DIR = process.env.GROK_DIR || path.join(HOME, 'Library', 'Application Support', 'Grok Bot', 'sand-client-persistence');
 const b32key = new Map();
 function b32(name) {

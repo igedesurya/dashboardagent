@@ -19,4 +19,11 @@ services:
       - ${HOME}/.claude/projects:/data/claude:ro
       - ${HOME}/.cursor/projects:/data/cursor:ro
       - ${HOME}/.local/share/opencode:/data/opencode:ro
-      - ${HOME}/Library/Application Support/Grok Bot/sand-client-persistence:/data/grok:ro
+      # Grok Bot hanya ada di macOS; di Linux/Windows folder ini tidak ada,
+      # jadi mount dibuat opsional (required: false) agar container tetap jalan.
+      - type: bind
+        source: ${HOME}/Library/Application Support/Grok Bot/sand-client-persistence
+        target: /data/grok
+        read_only: true
+        bind:
+          create_host_path: false
