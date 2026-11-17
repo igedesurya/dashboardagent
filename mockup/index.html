@@ -37,6 +37,9 @@
   button { font: inherit; color: inherit; cursor: pointer; border: 0; border-radius: 12px; padding: 6px 12px; background: #fff; box-shadow: inset 0 -3px 0 #e2d6c2; border: 2px solid #eadfcd; }
   button:active { transform: translateY(1px); box-shadow: inset 0 -1px 0 #e2d6c2; }
   button:disabled { opacity: .55; cursor: not-allowed; }
+  .winbox { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 2px solid #eadfcd; border-radius: 12px; padding: 4px 8px; box-shadow: inset 0 -3px 0 #e2d6c2; }
+  .winbox select { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 2px 2px; outline: none; }
+  .winbox.busy { opacity: .6; }
 
   /* Panel agent */
   #panel { top: 78px; right: 12px; bottom: 12px; width: 320px; display: flex; flex-direction: column; padding: 14px 12px 12px; }
@@ -134,7 +137,18 @@
   <header class="topbar">
     <div class="hud brand"><span class="logo">🏢</span><div><h1>Agent HQ</h1><small id="mode">memuat…</small></div></div>
     <div class="hud" id="stats"></div>
-    <div class="hud clockbox"><span id="clock">--:--</span><button id="timeBtn">🕑 Otomatis</button><button id="panelBtn" title="Daftar agent (A)">👥 <b id="count"></b></button><button id="fsBtn" title="Layar penuh">⛶</button></div>
+    <div class="hud clockbox"><span id="clock">--:--</span><button id="timeBtn">🕑 Otomatis</button>
+      <label class="winbox" title="Rentang waktu agent yang ditampilkan"><span>⏱️</span>
+        <select id="windowSelect" aria-label="Rentang waktu">
+          <option value="60">1 jam</option>
+          <option value="360">6 jam</option>
+          <option value="1440" selected>24 jam</option>
+          <option value="4320">3 hari</option>
+          <option value="10080">7 hari</option>
+          <option value="43200">30 hari</option>
+        </select>
+      </label>
+      <button id="panelBtn" title="Daftar agent (A)">👥 <b id="count"></b></button><button id="fsBtn" title="Layar penuh">⛶</button></div>
   </header>
 
   <aside class="hud" id="panel">

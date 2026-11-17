@@ -95,6 +95,8 @@ Node 24+ is required because `node:sqlite` is used to read the opencode database
 
 Example: `WINDOW_MIN=10080 node server.js` to show the last 7 days of sessions.
 
+The window can also be changed live from the dashboard using the **⏱️ dropdown** in the top bar (1 hour … 30 days). The choice is saved in your browser and re-applied automatically on reload. The server-side default still comes from `WINDOW_MIN`.
+
 ## Supported agents
 
 These are the agents Agent HQ can detect **automatically** — no configuration needed as long as the agent has run at least once on this machine.
@@ -196,6 +198,8 @@ That's intentional — it binds to `127.0.0.1` only. Set `HOST=0.0.0.0` and publ
 ## API
 
 - `GET /api/agents` — snapshot of all active agents (JSON)
+- `GET /api/settings` — current window settings (`windowMin`, bounds)
+- `POST /api/settings` — set the display window, e.g. `{"windowMin": 60}` (1 minute … 1 year)
 - `GET /api/stream` — Server-Sent Events for automatic updates
 - `POST /api/events` — receive reports from external bots
 

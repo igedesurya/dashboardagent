@@ -373,6 +373,47 @@ timeBtn.addEventListener('click', () => {
   timeBtn.textContent = '🕑 ' + MODES[mode][0];
   tickClock();
 });
+
+// ---------- Jendela waktu (berapa lama agent tetap ditampilkan) ----------
+const windowSelect = $('#windowSelect');
+const windowBox = windowSelect?.closest('.winbox');
+const WINDOW_LS_KEY = 'agent-hq-window-min';
+async function applyWindowMin(min, { persist = true } = {}) {
+  if (!windowSelect) return;
+  min = String(min);
+  // kalau nilainya tidak ada di daftar, tambahkan option
+  if (![...windowSelect.options].some((o) => o.value === min)) {
+    const opt = document.createElement('option');
+    opt.value = min; opt.textContent = `${min} mnt`;
+    windowSelect.appendChild(opt);
+  }
+  windowSelect.value = min;
+  if (windowBox) windowBox.classList.add('busy');
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ windowMin: +min }),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      windowSelect.value = String(j.windowMin);
+      if (persist) localStorage.setItem(WINDOW_LS_KEY, String(j.windowMin));
+    }
+  } catch {}
+  if (windowBox) windowBox.classList.remove('busy');
+}
+windowSelect?.addEventListener('change', () => applyWindowMin(windowSelect.value));
+// Pulihkan preferensi tersimpan (atau nilai dari server) saat halaman dibuka.
+(async () => {
+  const saved = localStorage.getItem(WINDOW_LS_KEY);
+  try {
+    const r = await fetch('/api/settings');
+    const j = r.ok ? await r.json() : null;
+    const initial = saved || (j && j.windowMin);
+    if (initial) await applyWindowMin(initial, { persist: !!saved });
+  } catch {}
+})();
 function tickClock() {
   const d = new Date();
   $('#clock').textContent = hhmm(d);

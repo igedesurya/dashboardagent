@@ -12,8 +12,29 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mockup');
 const PORT = +process.env.PORT || 5173;
 const HOST = process.env.HOST || '127.0.0.1';
 const HOME = os.homedir();
-const WINDOW = (+process.env.WINDOW_MIN || 24 * 60) * 60e3; // sesi yang lebih lama dari ini disembunyikan
+const WINDOW_ENV = +process.env.WINDOW_MIN || 24 * 60; // nilai awal dari env
+let WINDOW = WINDOW_ENV * 60e3; // sesi yang lebih lama dari ini disembunyikan
 const MIN = 60e3;
+
+// Jendela waktu (WINDOW) bisa diubah langsung dari dashboard lewat POST /api/settings.
+// Perubahan hanya berlaku di memori proses (tidak menulis apa pun ke disk), jadi tidak
+// melanggar prinsip read-only. Nilai awal datang dari env WINDOW_MIN.
+const WINDOW_MIN_BOUNDS = [1, 60 * 24 * 365]; // 1 menit .. 1 tahun
+function setWindowMin(m) {
+  const v = Math.round(Number(m));
+  if (!Number.isFinite(v) || v < WINDOW_MIN_BOUNDS[0] || v > WINDOW_MIN_BOUNDS[1]) return null;
+  WINDOW = v * MIN;
+  return v;
+}
+function windowSettings() {
+  return {
+    windowMin: Math.round(WINDOW / MIN),
+    envWindowMin: WINDOW_ENV,
+    min: WINDOW_MIN_BOUNDS[0],
+    max: WINDOW_MIN_BOUNDS[1],
+    pinnedByEnv: Math.round(WINDOW / MIN) === Math.round(WINDOW_ENV),
+  };
+}
 
 // Lokasi data bisa diganti lewat env (dipakai saat jalan di Docker)
 const CLAUDE_DIR = process.env.CLAUDE_DIR || path.join(HOME, '.claude', 'projects');
@@ -474,6 +495,20 @@ http.createServer((req, res) => {
     res.write(`data: ${snapshot}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
+    return;
+  }
+  if (url.pathname === '/api/settings' && req.method === 'GET') return json(res, 200, windowSettings());
+  if (url.pathname === '/api/settings' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1024) req.destroy(); });
+    req.on('end', () => {
+      let parsed = {};
+      try { parsed = JSON.parse(body || '{}'); } catch { return json(res, 400, { ok: false, error: 'JSON tidak valid' }); }
+      const v = setWindowMin(parsed.windowMin ?? parsed.minutes ?? parsed.value);
+      if (v === null) return json(res, 400, { ok: false, error: `windowMin harus angka ${WINDOW_MIN_BOUNDS[0]}..${WINDOW_MIN_BOUNDS[1]}` });
+      tick();
+      return json(res, 200, { ok: true, ...windowSettings() });
+    });
     return;
   }
   if (url.pathname === '/api/events') {
