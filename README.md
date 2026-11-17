@@ -4,6 +4,16 @@ A visual dashboard for monitoring AI agents (Claude Code, Cursor, opencode, Grok
 
 The server only **reads** data from your local Claude/Cursor/opencode/Grok folders — it never modifies them. No npm dependencies; it just needs Node 24 (for `node:sqlite`, which reads the opencode database).
 
+## Quick start
+
+```bash
+npx github:igedesurya/dashboardagent
+```
+
+Then open http://127.0.0.1:5173. Requires Node 24+. No clone, no install, no Docker.
+
+To pick a different time range: `WINDOW_MIN=10080 npx github:igedesurya/dashboardagent` (7 days).
+
 ## Requirements
 
 - macOS (the Claude/Cursor/Grok Bot data defaults to macOS paths)
@@ -70,10 +80,24 @@ node --disable-warning=ExperimentalWarning server.js
 
 ## Usage (without Docker)
 
+The fastest way on any OS (macOS, Linux, Windows) — no clone, no install:
+
+```bash
+npx github:igedesurya/dashboardagent
+```
+
+Or clone and use a one-command launcher:
+
 ```bash
 git clone git@github.com:igedesurya/dashboardagent.git
 cd dashboardagent
-node --disable-warning=ExperimentalWarning server.js
+./start.sh        # macOS / Linux
+```
+
+```powershell
+git clone git@github.com:igedesurya/dashboardagent.git
+cd dashboardagent
+powershell -ExecutionPolicy Bypass -File start.ps1   # Windows
 ```
 
 Open http://127.0.0.1:5173
