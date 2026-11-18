@@ -423,7 +423,7 @@ function scanGrokApp(now, out) {
       if (r.awaitingUserResponse) s = { state: 'waiting', task: 'menunggu jawabanmu', tool: '—' };
       // Grok Bot tidak memberi sinyal 'selesai' yang eksplisit; selama ada
       // aktivitas dalam 15 menit terakhir, anggap masih mengerjakan tugas.
-      else if (now - updated < 15 * MIN) s = { state: 'running', task: 'mengerjakan permintaanmu', tool: '—' };
+      else if (now - updated < 15 * MIN) s = { state: 'reading', task: 'meneliti / mencari informasi', tool: '—' };
       out.push({
         id: 'grok:' + r.id, source: 'grok', name: clip(r.name || 'Grok', 16), ...s,
         model: 'Grok', project: 'Grok Bot', tokens: null, started: r.createdAt || updated, updated,
