@@ -187,12 +187,8 @@ function scanClaude(now, out) {
         if (age > WINDOW) continue;
         const info = cached(file, st, parseClaude);
         if (!info.last) continue;
-        const cstate = claudeState(info, age);
-        // Sesi yang sudah selesai tidak ditampilkan kalau sudah lewat 30 menit:
-        // jendela waktu (WINDOW) hanya berlaku untuk sesi yang masih aktif.
-        if (cstate.state === 'idle' && age > 30 * MIN) continue;
         out.push({
-          id: 'claude:' + f.slice(0, -6), source: 'claude', ...cstate,
+          id: 'claude:' + f.slice(0, -6), source: 'claude', ...claudeState(info, age),
           model: info.model || '—', project: info.cwd ? path.basename(info.cwd) : d,
           tokens: info.tokens, started: born(st), updated: st.mtimeMs,
         });
@@ -346,12 +342,8 @@ function scanOpencode(now, out) {
         let model = '—';
         try { model = JSON.parse(r.model).id || model; } catch {}
         const age = now - (l.t || r.updated || now);
-        const ostate = opencodeState(l, err, age);
-        // Sesi yang sudah selesai (state idle) tidak ditampilkan kalau sudah
-        // lewat 30 menit, supaya sesi lama tidak menumpuk sebagai agent.
-        if (ostate.state === 'idle' && age > 30 * MIN) continue;
         out.push({
-          id: 'opencode:' + r.id, source: 'opencode', ...ostate,
+          id: 'opencode:' + r.id, source: 'opencode', ...opencodeState(l, err, age),
           model, project: path.basename(r.directory || '') || '—',
           tokens: Number(r.tokens) || null, started: Number(r.started), updated: Number(l.t || r.updated) || now,
         });
@@ -362,11 +354,8 @@ function scanOpencode(now, out) {
         const l = JSON.parse(r.last);
         let model = '—';
         try { model = JSON.parse(r.model).id || model; } catch {}
-        const age = now - (l.t || 0);
-        const ostate = opencodeState(l, r.err, age);
-        if (ostate.state === 'idle' && age > 30 * MIN) continue;
         out.push({
-          id: 'opencode:' + r.id, source: 'opencode', ...ostate,
+          id: 'opencode:' + r.id, source: 'opencode', ...opencodeState(l, r.err, now - (l.t || 0)),
           model, project: path.basename(r.directory || '') || '—',
           tokens: Number(r.tokens) || null, started: Number(r.started), updated: Number(l.t) || now,
         });
