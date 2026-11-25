@@ -26,7 +26,7 @@ Satu objek agen punya tepat field ini. Tidak ada field tambahan di JSON publik.
 |---|---|---|
 | `id` | string | Wajib. Format tetap: `claude:<file tanpa .jsonl>`, `cursor:<nama sesi>`, `opencode:<id sqlite>`, `grok:<id roster>`, bot: `<source>:<nama>`. Jangan diubah; warna karakter di UI di-hash dari `id`. |
 | `source` | string | Wajib. `claude`, `cursor`, `opencode`, `grok`, atau sumber bot (`^[a-z0-9_-]{1,16}$`, default `grok`). |
-| `name` | string | Opsional saat scan. `collect()` yang mengisi nama chibi lewat `nameFor` hanya jika `name` masih kosong. Grok dan bot sudah punya `name`; jangan ditimpa. |
+| `name` | string | Opsional saat scan. `collect()` yang mengisi nama chibi lewat `nameFor` hanya jika `name` masih kosong. Grok dan bot sudah punya `name`; jangan ditimpa. `agentRecord` tidak memberi default untuk `name`: kalau input tidak punya `name`, field itu tidak ada di hasil, supaya `name ||= nameFor(...)` tetap jalan. |
 | `state` | string | Wajib. Salah satu: `coding`, `running`, `reading`, `waiting`, `thinking`, `idle`, `error`. Nilai lain ditolak. |
 | `task` | string atau null | Teks singkat. `idle` tanpa tugas memakai `null`, bukan `""`. |
 | `tool` | string | Nama tool. Tidak diketahui: `"—"`. Jangan `null`. |
@@ -49,7 +49,7 @@ File baru: `lib/agent.js`. Hanya ini yang diekspor:
 
 1. Menyalin hanya field kontrak. Field lain di `input` dibuang.
 2. Mengisi default `tool` / `model` / `project` ke `"—"`, `task` kosong menjadi `null`, `tokens` non-angka menjadi `null`.
-3. `state` di luar `AGENT_STATES` mengembalikan `null`, tidak melempar. `tick()` membungkus seluruh `collect()` dalam satu `try`. Satu lemparan di tengah scan opencode ikut masuk `catch` yang menutup database dan mengosongkan snapshot putaran itu. Scanner yang mendapat `null` melewati baris itu.
+3. `state` di luar `AGENT_STATES` mengembalikan `null`, tidak melempar. Alasannya: lemparan di dalam `scanOpencode` ditangkap `catch` milik fungsi itu, yang menutup database dan membuat semua sesi opencode hilang di putaran itu. Lemparan yang lolos sampai `tick()` membuat seluruh putaran gagal dan snapshot lama dipertahankan. Satu baris yang buruk tidak boleh menyebabkan salah satunya. Pemanggil menulis `const rec = agentRecord(...); if (rec) out.push(rec);`.
 4. Mengembalikan objek polos. Bukan class.
 
 `agentRecord` tidak membaca file, tidak menamai chibi, tidak menerapkan jendela waktu, dan tidak memetakan tool ke status.
@@ -80,7 +80,9 @@ Jangan tambah fungsi `normalizeAgent`, `toDto`, `mapAgent`, atau sejenisnya di s
 |---|---|
 | `lib/agent.js` | Baru. Kontrak + `agentRecord`. |
 | `server.js` | Import `agentRecord` dan `AGENT_STATES`. Ganti pembuatan objek. Hapus `BOT_STATES`. |
-| `package.json` | Tidak diubah. Entry tetap `server.js`. |
+| `package.json` | Tidak diubah. Entry tetap `server.js`. Paket npm sudah ikut membawa `lib/` karena tidak ada daftar `files`. |
+| `Dockerfile` | Tambah `COPY lib ./lib` setelah `COPY server.js ./`. Tanpa ini, image hasil build ulang gagal start (`ERR_MODULE_NOT_FOUND`) dan container terus restart. |
+| `.dockerignore` | Tambah `!lib/` di samping `!server.js` dan `!mockup/`. |
 | `mockup/*` | Tidak diubah. `applySnapshot` sudah menyalin field server ke objek scene (`started` menjadi `since`, identitas visual di `def`). Penyatuan itu bukan bagian plan ini. |
 | `integrations/agent_hq.py` | Tidak diubah. Payload POST tetap sama. |
 | `README.md` | Tidak diubah. API publik tidak berubah. |
@@ -99,18 +101,20 @@ Jangan tambah fungsi `normalizeAgent`, `toDto`, `mapAgent`, atau sejenisnya di s
 1. Tambah `lib/agent.js` dengan `AGENT_STATES` dan `agentRecord`.
 2. Di `server.js`, ganti lima tempat pembuatan objek. Jangan pindahkan isi scanner.
 3. Hapus `BOT_STATES`. Pakai `AGENT_STATES`.
-4. Jalankan cek di bawah. Kalau perilaku JSON berubah, perbaiki `agentRecord`, jangan menambah mapper kedua.
+4. Tambah `lib/` ke `Dockerfile` dan `.dockerignore`.
+5. Jalankan cek di bawah. Kalau perilaku JSON berubah, perbaiki `agentRecord`, jangan menambah mapper kedua.
 
 ## Cek selesai
 
 Tidak ada test runner. Cukup skrip Node kecil yang dijalankan lalu dihapus, atau `node --check`.
 
 1. `node --check server.js` dan `node --check lib/agent.js`.
-2. `agentRecord` tanpa `tool` / `model` / `tokens` menghasilkan `"—"`, `"—"`, dan `null`.
+2. `agentRecord` tanpa `tool` / `model` / `tokens` menghasilkan `"—"`, `"—"`, dan `null`. Tanpa `name`, hasilnya tidak punya key `name`.
 3. `agentRecord` tanpa `state` yang sah mengembalikan `null`, termasuk `state: "offline"`. `offline` hanya perintah hapus di `botEvent`, sebelum `agentRecord` dipanggil.
 4. Server jalan, `GET /api/agents` adalah array. Setiap elemen punya tepat 11 key kontrak.
 5. Satu sesi yang sama mempertahankan `id` yang sama setelah reload.
 6. `POST /api/events` dengan `status: "coding"` menambah satu objek. `status: "offline"` menghapusnya. `status: "nope"` tetap `400`.
-7. Diff tidak menyentuh `mockup/`, `integrations/`, Docker, atau README.
+7. Diff tidak menyentuh `mockup/`, `integrations/`, compose file, atau README. Di Docker hanya `Dockerfile` dan `.dockerignore` yang berubah, untuk menyalin `lib/`.
+8. `docker compose up -d --build`, lalu container `healthy` dan `GET /api/agents` dari host lolos cek 4.
 
 Selesai bila kelima scanner dan bot memakai `agentRecord`, tidak ada pembuat objek kedua, dan response API tetap array field di atas.

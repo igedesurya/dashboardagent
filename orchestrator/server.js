@@ -6,8 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PORT, HOME, DATA, MAX_ACTIVE, ensureDir, loadToken, readJson, writeJson, findBin, clip } from './lib.js';
 import { normalize, classify } from './policy.js';
-import { isRepo, ensureWorktree, ensureDetached, removeWorktree, commitAll, diffAgainst, mergeInto, currentRef } from './git.js';
-import { ROLES, HANDOFF, TOOLS, instructions } from './roles.js';
+import { isRepo, ensureWorktree, ensureDetached, removeWorktree, commitAll, diffAgainst, mergeInto, currentRef, dirtyFiles } from './git.js';
+import { ROLES, HANDOFF, TOOLS, PROJECT_KINDS, instructions, isSoftware, hasBrief } from './roles.js';
 import { createClaude } from './engines/claude.js';
 import { createCursor, listCursorModels } from './engines/cursor.js';
 import { createGemini, listGeminiModels } from './engines/gemini.js';
@@ -19,6 +19,8 @@ const PROJECTS_DIR = ensureDir(path.join(DATA, 'projects'));
 const QUOTA_PAUSE = 15 * 60 * 1000;
 // A working agent with no activity for this long is considered stuck and stopped.
 const STALL_MS = 20 * 60 * 1000;
+// Idle agents release their processes after this long; the next turn resumes the same session.
+const IDLE_MS = +process.env.AHQ_IDLE_MIN * 60000 || 5 * 60 * 1000;
 const ENGINES = ['claude', 'opencode', 'cursor', 'gemini'];
 const DEFAULT_MODEL = { claude: 'sonnet', opencode: 'opencode/deepseek-v4.1-flash-free', cursor: '', gemini: 'auto' };
 
@@ -39,6 +41,8 @@ function loadProjects() {
     const state = readJson(path.join(pdir(id), 'state.json'), {});
     // Permission requests do not survive a restart: the agent that asked is gone.
     for (const m of state.chat || []) if (m.kind === 'permission' && !m.decision) m.decision = 'expired';
+    // Old "always" entries were plain strings shared by every role (e.g. any rm -rf, all of /Users/<you>). Drop them.
+    if ((state.remembered || []).some((r) => typeof r === 'string')) state.remembered = state.remembered.filter((r) => typeof r === 'object');
     projects.set(id, {
       meta,
       state: { chat: [], tickets: [], seq: { t: 0, q: 0, m: 0 }, remembered: [], ...state },
@@ -129,6 +133,11 @@ function prepareWorkspace(p, role, opts = {}) {
   const roots = [dir, safeReal(dir), worktreeRoot(p.meta.id), ...p.meta.folders.flatMap((f) => [f, safeReal(f)])].filter((v, i, a) => v && a.indexOf(v) === i);
   return { dir, prompt, roots, writeRoots: opts.dir ? [dir, safeReal(dir)].filter(Boolean) : [] };
 }
+const hashText = (s) => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h;
+};
 const worktreeRoot = (pid) => path.join(DATA, 'worktrees', pid);
 function safeReal(p) {
   try {
@@ -183,7 +192,7 @@ class Worker {
     const ws = prepareWorkspace(p, this.role, { ...this.opts, inst: this.inst });
     this.roots = ws.roots;
     this.writeRoots = ws.writeRoots;
-    const key = `${engine}|${model}|${p.meta.folders.join(',')}|${ws.dir}`;
+    const key = `${engine}|${model}|${p.meta.folders.join(',')}|${ws.dir}|${hashText(ws.prompt)}`;
     if (this.adapter && this.key === key) return;
     this.adapter?.stop();
     this.key = key;
@@ -265,6 +274,26 @@ setInterval(() => {
     w.key = null;
   }
 }, 60000);
+// Free memory: stop idle Claude Code processes and, when no opencode role is working, the opencode server.
+// Sessions stay saved, so the next message continues the same conversation (--resume / same session id).
+let opencodeLastUsed = 0;
+setInterval(() => {
+  const now = Date.now();
+  for (const w of workers.values()) {
+    if (w.engine === 'opencode' && (w.busy || w.inbox.length)) opencodeLastUsed = now;
+    if (!w.adapter || w.busy || w.inbox.length || pendingFor(w) || now - w.updated < IDLE_MS) continue;
+    // opencode roles have no process of their own; stopping would only send an interrupt to the server.
+    if (w.engine !== 'opencode') w.adapter.stop();
+    w.adapter = null;
+    w.key = null;
+  }
+  const opencodeBusy = [...workers.values()].some((w) => w.engine === 'opencode' && (w.busy || w.inbox.length));
+  if (!opencodeBusy && opencodeLastUsed && now - opencodeLastUsed > IDLE_MS) {
+    stopOpencode();
+    opencodeLastUsed = 0;
+  }
+}, 60000);
+
 const pendingFor = (w) => [...pending.values()].some((r) => r.pid === w.pid && r.role === w.role && (r.inst || '') === w.inst);
 
 async function runTurn(w) {
@@ -284,6 +313,7 @@ async function runTurn(w) {
   }
   active--;
   w.busy = false;
+  if (w.engine === 'opencode') opencodeLastUsed = Date.now();
   w.activity = null;
   w.updated = Date.now();
   if (r.text) addChat(w.pid, { from: w.role, who: w.inst ? w.label : undefined, kind: 'message', text: r.text });
@@ -357,15 +387,23 @@ function decide({ pid, role, inst, engine, tool, input }) {
   const w = workers.get(`${pid}:${role}${inst ? ':' + inst : ''}`) || workerFor(pid, role);
   if (!w.roots.length) Object.assign(w, (({ roots, writeRoots }) => ({ roots, writeRoots }))(prepareWorkspace(p, role, { ...w.opts, inst: w.inst })));
   const req = normalize(engine, tool, input);
-  const c = classify(req, { roots: w.roots, writeRoots: w.writeRoots, mirrors: mirrorsFor(p, w), noEdit: !!ROLES[role]?.noEdit, readOnly: ROLES[role]?.readOnly ?? true, remembered: new Set(p.state.remembered) });
+  const c = classify(req, {
+    roots: w.roots,
+    writeRoots: w.writeRoots,
+    mirrors: mirrorsFor(p, w),
+    forbidden: forbiddenFor(p),
+    noEdit: !!ROLES[role]?.noEdit,
+    readOnly: ROLES[role]?.readOnly ?? true,
+    remembered: new Set(p.state.remembered.filter((r) => r.role === role).map((r) => r.key)),
+  });
   if (process.env.AHQ_DEBUG) console.log('[izin]', engine, role, tool, JSON.stringify(input).slice(0, 200), '=>', req.kind, c.decision);
   if (c.decision === 'allow') return Promise.resolve({ allow: true });
   if (c.decision === 'deny') return Promise.resolve({ allow: false, message: c.reason });
   return new Promise((resolve) => {
     const id = `P${Date.now().toString(36)}${++seqPerm}`;
-    const req2 = { id, pid, role, inst: w.inst, who: w.label, summary: c.summary, reason: c.reason, key: c.key, detail: clip(JSON.stringify(input), 500), created: Date.now(), resolve };
+    const req2 = { id, pid, role, inst: w.inst, who: w.label, summary: c.summary, reason: c.reason, key: c.key, rememberable: !!c.key, detail: clip(JSON.stringify(input), 500), created: Date.now(), resolve };
     pending.set(id, req2);
-    addChat(pid, { from: role, who: w.label, kind: 'permission', permission: id, text: c.summary, reason: c.reason });
+    addChat(pid, { from: role, who: w.label, kind: 'permission', permission: id, text: c.summary, reason: c.reason, rememberable: !!c.key });
     emit(pid);
   });
 }
@@ -374,13 +412,25 @@ function resolvePermission(id, decision) {
   if (!r) return false;
   pending.delete(id);
   const p = projects.get(r.pid);
-  if (decision === 'always' && r.key && !p.state.remembered.includes(r.key)) p.state.remembered.push(r.key);
+  // "Always" covers only this role and this exact command/folder/host.
+  if (decision === 'always' && !r.key) decision = 'once';
+  if (decision === 'always' && !p.state.remembered.some((x) => x.role === r.role && x.key === r.key)) {
+    p.state.remembered.push({ key: r.key, role: r.role, summary: r.summary, t: Date.now() });
+  }
   const msg = p.state.chat.find((m) => m.permission === id);
   if (msg) msg.decision = decision;
   save(r.pid);
   r.resolve(decision === 'deny' ? { allow: false, message: 'Ditolak oleh pengguna.' } : { allow: true });
   emit(r.pid);
   return true;
+}
+
+// Areas no role may touch: the orchestrator's data and every other project's folders.
+// (A role's own workspace and its ticket worktrees are in its roots, which take precedence.)
+function forbiddenFor(p) {
+  const own = new Set(p.meta.folders);
+  const others = [...projects.values()].flatMap((x) => (x === p ? [] : x.meta.folders)).filter((f) => !own.has(f));
+  return [DATA, safeReal(DATA), ...others, ...others.map(safeReal)].filter(Boolean);
 }
 
 onOpencodePermission(async (d) => {
@@ -408,7 +458,7 @@ function ticketText(p, t) {
   for (const d of t.docs || []) lines.push('', `## Dokumen ${DOC_LABEL[d.jenis] || d.jenis} (${roleLabel(d.role)})`, d.isi);
   if (t.work) {
     const devs = Object.entries(t.work.devs).map(([n, d]) => `- Programmer ${n} [${d.status}]: ${d.summary || d.task || ''}`);
-    lines.push('', `## Pengerjaan (branch ahq/${t.id}; repo: ${t.work.repos.map((r) => r.name).join(', ')})`, ...devs);
+    lines.push('', `## Pengerjaan (branch ${tb(t)}; repo: ${t.work.repos.map((r) => r.name).join(', ')})`, ...devs);
     if (t.work.run) lines.push(`- Run aplikasi: ${t.work.run.ok ? 'berhasil' : 'gagal'} — ${t.work.run.summary}`);
     for (const [n, q] of Object.entries(t.work.qa || {})) lines.push(`- QA ${n} [${q.status}]: ${q.hasil || ''}${q.temuan ? `\n  Temuan: ${q.temuan}` : ''}`);
   }
@@ -440,7 +490,8 @@ function teamTool(pid, role, tool, a = {}, inst = '') {
       case 'tanya_pengguna': {
         const q = `Q-${++p.state.seq.q}`;
         const t = a.tiket ? ticketOf(p, a.tiket) : null;
-        if (t && t.status !== 'tanya_pengguna') {
+        // A ticket waiting for the client keeps that status while the PM asks around it.
+        if (t && t.status !== 'tanya_pengguna' && t.status !== 'tunggu_klien') {
           t.prev = t.status;
           setTicket(p, t, 'tanya_pengguna');
         }
@@ -543,43 +594,20 @@ function teamTool(pid, role, tool, a = {}, inst = '') {
         const all = Object.keys(t.work.devs);
         const targets = +a.programmer ? [String(a.programmer)].filter((n) => all.includes(n)) : all;
         if (!targets.length) return { error: `Programmer ${a.programmer} tidak ada di ${t.id}.` };
-        t.work.round = (t.work.round || 1) + 1;
-        setTicket(p, t, 'perbaikan', clip(a.catatan, 200));
-        t.holder = 'dev';
         addChat(pid, { from: 'sa', kind: 'review', ticket: t.id, verdict: 'fix', text: a.catatan, targets });
-        for (const n of targets) {
-          t.work.devs[n].status = 'perbaikan';
-          devWorker(pid, t, n).enqueue(`[Dari SA] Hasil review ${t.id} (putaran ${t.work.round - 1}): perlu perbaikan.\n\n${a.catatan}\n\nPerbaiki di worktree-mu, lalu selesai_kerja lagi.`);
+        // Too many review rounds: stop the loop and let the user decide.
+        if ((t.work.round || 1) - 1 >= limitOf(t, 'review')) {
+          escalate(pid, t, 'review', { note: String(a.catatan || ''), targets });
+          return { text: `Batas putaran perbaikan tercapai. Keputusan ada di pengguna; akhiri giliranmu.` };
         }
+        requestFix(pid, t, targets, String(a.catatan || ''));
         return { text: `Permintaan perbaikan terkirim ke Programmer ${targets.join(', ')}.` };
       }
       case 'lolos_review': {
         const t = need(a.tiket);
         if (t.status !== 'review_kode') return { error: `${t.id} tidak sedang direview (status ${t.status}).` };
         addChat(pid, { from: 'sa', kind: 'review', ticket: t.id, verdict: 'pass', text: a.catatan });
-        const conflicts = [];
-        for (const [n] of Object.entries(t.work.devs)) {
-          for (const r of t.work.repos) {
-            const m = mergeInto(path.join(intDir(pid, t.id), r.name), `ahq/${t.id}-p${n}`, `${t.id}: gabungkan kerja Programmer ${n}`);
-            if (!m.ok) conflicts.push({ n, repo: r.name, files: m.conflicts });
-          }
-        }
-        if (conflicts.length) {
-          setTicket(p, t, 'perbaikan', 'konflik saat menggabungkan');
-          t.holder = 'dev';
-          for (const c of conflicts) {
-            t.work.devs[c.n].status = 'perbaikan';
-            devWorker(pid, t, c.n).enqueue(`[Sistem] Kerjamu di ${t.id} lolos review, tapi bentrok saat digabung ke branch ahq/${t.id} (repo ${c.repo}):\n${c.files}\n\nDi worktree-mu, jalankan \`git merge ahq/${t.id}\`, selesaikan konfliknya, commit, lalu selesai_kerja lagi.`);
-          }
-          addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Konflik saat menggabungkan ${t.id}: ${conflicts.map((c) => `Programmer ${c.n} (${c.repo})`).join(', ')}. Programmer menyelesaikan konfliknya.` });
-          return { text: 'Review tercatat, tapi ada konflik penggabungan; Programmer yang bersangkutan diminta menyelesaikannya.' };
-        }
-        setTicket(p, t, 'run_aplikasi', 'lolos review, digabung ke branch tiket');
-        t.holder = 'dev';
-        addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Kerja semua Programmer digabung ke branch ahq/${t.id}. Programmer menjalankan aplikasi.` });
-        const tests = Object.entries(t.work.devs).map(([n, d]) => `- Programmer ${n}: ${d.test || '(tidak disebutkan)'}`).join('\n');
-        devWorker(pid, t, 'run').enqueue(`[Sistem] ${t.id} lolos review SA dan sudah digabung di branch ahq/${t.id} (folder kerjamu).\n\nLokasi kerja:\n${pathMap(pid, t, 'run')}\n\nJalankan test/aplikasi sampai tidak ada error. Cara uji dari para Programmer:\n${tests}\n\nLalu lapor_run.`);
-        return { text: `${t.id} lolos review dan digabung. Programmer menjalankan aplikasinya.` };
+        return { text: passReview(pid, t) };
       }
       case 'tahan_klien': {
         const t = need(a.tiket);
@@ -625,6 +653,14 @@ function teamTool(pid, role, tool, a = {}, inst = '') {
 }
 
 // The user approves or sends back the SA's technical plan.
+// The git folders a ticket changes: the ones the SA named, or every git folder of the project.
+function reposFor(p, t) {
+  const gitFolders = p.meta.folders.filter(isRepo);
+  const wanted = new Set((t.plan?.repos || []).map((x) => path.basename(String(x))));
+  const named = gitFolders.filter((f) => wanted.has(path.basename(f)));
+  return named.length ? named : gitFolders;
+}
+
 function decidePlan(pid, ticketId, decision, note) {
   const p = projects.get(pid);
   const t = ticketOf(p, ticketId);
@@ -653,33 +689,33 @@ function decidePlan(pid, ticketId, decision, note) {
 }
 
 // ---------------- ticket work (Programmers) ----------------
+// The ticket branch (older tickets used ahq/<ticket> without the project id).
+const tb = (t) => t.work?.branch || `ahq/${t.id}`;
 const devDir = (pid, tid, n) => path.join(worktreeRoot(pid), tid, n === 'run' ? 'tiket' : `p${n}`);
 const intDir = (pid, tid) => path.join(worktreeRoot(pid), tid, 'tiket');
 const WORK_STATUS = new Set(['dikerjakan', 'review_kode', 'perbaikan', 'run_aplikasi', 'testing']);
 function devWorker(pid, t, n) {
-  return workerFor(pid, 'dev', String(n), { dir: devDir(pid, t.id, String(n)), ticket: t.id, mode: n === 'run' ? 'run' : 'kerja', repos: t.work.repos.map((r) => r.name) });
+  return workerFor(pid, 'dev', String(n), { dir: devDir(pid, t.id, String(n)), ticket: t.id, branch: tb(t), mode: n === 'run' ? 'run' : 'kerja', repos: t.work.repos.map((r) => r.name) });
 }
 
 // After the user approves the SA's plan: one branch per ticket, one branch + worktree per Programmer.
 function startWork(pid, t) {
   const p = projects.get(pid);
-  const gitFolders = p.meta.folders.filter(isRepo);
-  const wanted = new Set((t.plan.repos || []).map((x) => path.basename(String(x))));
-  let repos = gitFolders.filter((f) => wanted.has(path.basename(f)));
-  if (!repos.length) repos = gitFolders;
+  const repos = reposFor(p, t);
   if (!repos.length) {
     setTicket(p, t, 'gagal', 'tidak ada repo git di folder project');
     addChat(pid, { from: 'system', kind: 'error', ticket: t.id, text: `${t.id} tidak bisa dikerjakan: tidak ada folder project yang berupa repo git.` });
     return;
   }
   const n = t.plan.programmer;
-  const work = { repos: repos.map((f) => ({ name: path.basename(f), src: f })), base: {}, devs: {}, round: 1 };
+  // Branch names carry the project id: every project numbers its tickets from T-001, and projects may share a repo.
+  const work = { repos: repos.map((f) => ({ name: path.basename(f), src: f })), branch: `ahq/${pid}/${t.id}`, base: {}, devs: {}, round: 1 };
   try {
     for (const r of work.repos) {
       const ref = currentRef(r.src);
       work.base[r.name] = ref;
-      ensureWorktree(r.src, path.join(intDir(pid, t.id), r.name), `ahq/${t.id}`, ref.commit);
-      for (let i = 1; i <= n; i++) ensureWorktree(r.src, path.join(devDir(pid, t.id, String(i)), r.name), `ahq/${t.id}-p${i}`, `ahq/${t.id}`);
+      ensureWorktree(r.src, path.join(intDir(pid, t.id), r.name), work.branch, ref.commit);
+      for (let i = 1; i <= n; i++) ensureWorktree(r.src, path.join(devDir(pid, t.id, String(i)), r.name), `${work.branch}-p${i}`, work.branch);
     }
   } catch (e) {
     setTicket(p, t, 'gagal', 'gagal menyiapkan worktree');
@@ -691,7 +727,7 @@ function startWork(pid, t) {
   setTicket(p, t, 'dikerjakan', `${n} Programmer mulai`);
   t.holder = 'dev';
   const from = work.repos.map((r) => `${r.name} (${work.base[r.name].branch})`).join(', ');
-  addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Rencana ${t.id} disetujui. Branch ahq/${t.id} dibuat dari ${from}; ${n} Programmer mulai bekerja di worktree terpisah.` });
+  addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Rencana ${t.id} disetujui. Branch ${work.branch} dibuat dari ${from}; ${n} Programmer mulai bekerja di worktree terpisah.` });
   for (let i = 1; i <= n; i++) assignDev(pid, t, String(i));
 }
 function assignDev(pid, t, n) {
@@ -710,7 +746,7 @@ function startReview(pid, t) {
     parts.push(`## Programmer ${n}\nTugas: ${d.task || '(seluruh rencana)'}\nRingkasan: ${d.summary}\nCara uji: ${d.test || '-'}`);
     for (const r of t.work.repos) {
       const dir = path.join(devDir(pid, t.id, n), r.name);
-      const diff = diffAgainst(dir, `ahq/${t.id}`);
+      const diff = diffAgainst(dir, `${tb(t)}`);
       parts.push(`### ${r.name} — worktree: ${dir}\n${diff.stat}\n\n\`\`\`diff\n${diff.patch}\n\`\`\``);
     }
   }
@@ -731,10 +767,100 @@ function pathMap(pid, t, n) {
   return t.work.repos.map((r) => `- ${r.name}: UBAH di ${path.join(devDir(pid, t.id, n), r.name)}   (folder asli ${r.src} hanya untuk dibaca)`).join('\n');
 }
 
+// ---------------- review rounds ----------------
+// Fix rounds after review, and QA rounds, before the user has to decide.
+const ROUND_LIMIT = { review: 2, qa: 2 };
+const limitOf = (t, kind) => t.work?.limits?.[kind] ?? ROUND_LIMIT[kind];
+
+function requestFix(pid, t, targets, note) {
+  const p = projects.get(pid);
+  t.work.round = (t.work.round || 1) + 1;
+  setTicket(p, t, 'perbaikan', clip(note, 200));
+  t.holder = 'dev';
+  for (const n of targets) {
+    t.work.devs[n].status = 'perbaikan';
+    devWorker(pid, t, n).enqueue(`[Dari SA] Hasil review ${t.id} (putaran ${t.work.round - 1}): perlu perbaikan.\n\n${note}\n\nPerbaiki di worktree-mu, lalu selesai_kerja lagi.`);
+  }
+}
+
+// Merge every Programmer branch into the ticket branch, then run the app (or go straight to QA).
+function passReview(pid, t) {
+  const p = projects.get(pid);
+  const conflicts = [];
+  for (const [n] of Object.entries(t.work.devs)) {
+    for (const r of t.work.repos) {
+      const m = mergeInto(path.join(intDir(pid, t.id), r.name), `${tb(t)}-p${n}`, `${t.id}: gabungkan kerja Programmer ${n}`);
+      if (!m.ok) conflicts.push({ n, repo: r.name, files: m.conflicts });
+    }
+  }
+  if (conflicts.length) {
+    setTicket(p, t, 'perbaikan', 'konflik saat menggabungkan');
+    t.holder = 'dev';
+    for (const c of conflicts) {
+      t.work.devs[c.n].status = 'perbaikan';
+      devWorker(pid, t, c.n).enqueue(`[Sistem] Kerjamu di ${t.id} lolos review, tapi bentrok saat digabung ke branch ${tb(t)} (repo ${c.repo}):\n${c.files}\n\nDi worktree-mu, jalankan \`git merge ${tb(t)}\`, selesaikan konfliknya, commit, lalu selesai_kerja lagi.`);
+    }
+    addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Konflik saat menggabungkan ${t.id}: ${conflicts.map((c) => `Programmer ${c.n} (${c.repo})`).join(', ')}. Programmer menyelesaikan konfliknya.` });
+    return 'Review tercatat, tapi ada konflik penggabungan; Programmer yang bersangkutan diminta menyelesaikannya.';
+  }
+  if (!isSoftware(p.meta)) {
+    t.work.run = { ok: true, summary: 'dilewati: project bukan software', t: Date.now() };
+    addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Kerja semua Programmer digabung ke branch ${tb(t)}. Project bukan software: langsung ke pemeriksaan QA.` });
+    startQA(pid, t);
+    return `${t.id} lolos review dan digabung. Diteruskan ke QA.`;
+  }
+  setTicket(p, t, 'run_aplikasi', 'lolos review, digabung ke branch tiket');
+  t.holder = 'dev';
+  addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Kerja semua Programmer digabung ke branch ${tb(t)}. Programmer menjalankan aplikasi.` });
+  const tests = Object.entries(t.work.devs).map(([n, d]) => `- Programmer ${n}: ${d.test || '(tidak disebutkan)'}`).join('\n');
+  devWorker(pid, t, 'run').enqueue(`[Sistem] ${t.id} lolos review SA dan sudah digabung di branch ${tb(t)} (folder kerjamu).\n\nLokasi kerja:\n${pathMap(pid, t, 'run')}\n\nJalankan test/aplikasi sampai tidak ada error. Cara uji dari para Programmer:\n${tests}\n\nLalu lapor_run.`);
+  return `${t.id} lolos review dan digabung. Programmer menjalankan aplikasinya.`;
+}
+
+// The loop ran too long: park the ticket and ask the user (more rounds, accept as is, or stop).
+function escalate(pid, t, kind, payload) {
+  const p = projects.get(pid);
+  t.work.escalation = { kind, ...payload, t: Date.now() };
+  setTicket(p, t, 'butuh_keputusan', kind === 'review' ? 'batas putaran review tercapai' : 'batas putaran QA tercapai');
+  t.holder = 'user';
+  const rounds = kind === 'review' ? (t.work.round || 1) - 1 : t.work.qaRound;
+  const what = kind === 'review' ? `SA masih meminta perbaikan setelah ${rounds} putaran.` : `QA masih menemukan masalah setelah ${rounds} putaran uji.`;
+  const detail = kind === 'review' ? payload.note : payload.findings;
+  addChat(pid, { from: 'system', kind: 'escalation', ticket: t.id, esc: kind, text: `${what}\n\n${clip(detail, 1500)}` });
+}
+
+function decideEscalation(pid, t, decision) {
+  const p = projects.get(pid);
+  const e = t.work?.escalation;
+  if (!e || t.status !== 'butuh_keputusan') return false;
+  const msg = [...p.state.chat].reverse().find((m) => m.kind === 'escalation' && m.ticket === t.id);
+  if (msg) msg.decision = decision;
+  t.work.escalation = null;
+  if (decision === 'more') {
+    t.work.limits = { ...(t.work.limits || {}), [e.kind]: limitOf(t, e.kind) + 1 };
+    if (e.kind === 'review') requestFix(pid, t, e.targets, e.note);
+    else sendQaFindings(pid, t, e.findings);
+  } else if (decision === 'accept') {
+    if (e.kind === 'review') {
+      addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `Pengguna menerima kode ${t.id} apa adanya; dilanjutkan.` });
+      setTicket(p, t, 'review_kode', 'diterima pengguna');
+      passReview(pid, t);
+    } else toPM(pid, t, 'diterima pengguna walaupun QA masih menemukan masalah.');
+  } else {
+    setTicket(p, t, 'gagal', 'dihentikan pengguna');
+    t.holder = null;
+    const kept = cleanupWorktrees(pid, t);
+    addChat(pid, { from: 'system', kind: 'ticket', ticket: t.id, text: `Tiket ${t.id} dihentikan.${kept ? ` Worktree dibersihkan; branch ${kept} tetap ada.` : ''}` });
+  }
+  save(pid);
+  emit(pid);
+  return true;
+}
+
 // ---------------- QA ----------------
 const qaDir = (pid, tid, n) => path.join(worktreeRoot(pid), tid, `qa${n}`);
 function qaWorker(pid, t, n) {
-  return workerFor(pid, 'qa', String(n), { dir: qaDir(pid, t.id, n), ticket: t.id, mode: 'qa', repos: t.work.repos.map((r) => r.name) });
+  return workerFor(pid, 'qa', String(n), { dir: qaDir(pid, t.id, n), ticket: t.id, branch: tb(t), mode: 'qa', repos: t.work.repos.map((r) => r.name) });
 }
 
 // The ticket branch runs cleanly: hand it to the QA testers from the plan (or straight to the PM when the plan has no QA).
@@ -743,7 +869,7 @@ function startQA(pid, t) {
   const n = t.plan?.qa ?? 1;
   if (!n) return toPM(pid, t, 'Rencana SA tidak memakai QA.');
   try {
-    for (let i = 1; i <= n; i++) for (const r of t.work.repos) ensureDetached(r.src, path.join(qaDir(pid, t.id, i), r.name), `ahq/${t.id}`);
+    for (let i = 1; i <= n; i++) for (const r of t.work.repos) ensureDetached(r.src, path.join(qaDir(pid, t.id, i), r.name), `${tb(t)}`);
   } catch (e) {
     setTicket(p, t, 'gagal', 'gagal menyiapkan worktree QA');
     addChat(pid, { from: 'system', kind: 'error', ticket: t.id, text: `Gagal menyiapkan salinan untuk QA ${t.id}: ${clip(e.stderr || e.message, 300)}` });
@@ -759,7 +885,7 @@ function startQA(pid, t) {
   for (let i = 1; i <= n; i++) {
     const part = n > 1 ? `Kamu QA ${i} dari ${n}. Bagi skenario: kerjakan skenario nomor ganjil/genap atau bagian ke-${i} secara adil, dan sebutkan di laporanmu skenario mana yang kamu uji.` : 'Uji semua skenario.';
     const paths = t.work.repos.map((r) => `- ${r.name}: ${path.join(qaDir(pid, t.id, i), r.name)}`).join('\n');
-    qaWorker(pid, t, i).enqueue(`[Sistem] Uji ${t.id} di branch ahq/${t.id}.\n${part}\n\nSalinan yang kamu uji:\n${paths}\n\n---\n${ticketText(p, t)}`);
+    qaWorker(pid, t, i).enqueue(`[Sistem] Uji ${t.id} di branch ${tb(t)}.\n${part}\n\nSalinan yang kamu uji:\n${paths}\n\n---\n${ticketText(p, t)}`);
   }
 }
 
@@ -769,10 +895,15 @@ function finishQA(pid, t) {
   const results = Object.entries(t.work.qa);
   const failed = results.filter(([, q]) => q.status === 'gagal');
   if (!failed.length) return toPM(pid, t, `QA lulus (${results.length} penguji).`);
-  setTicket(p, t, 'review_kode', `QA menemukan masalah (${failed.length} dari ${results.length})`);
+  const findings = failed.map(([n, q]) => `## QA ${n}\nTemuan: ${q.temuan}\nHasil: ${q.hasil}`).join('\n\n');
+  if ((t.work.qaRound || 1) >= limitOf(t, 'qa')) return escalate(pid, t, 'qa', { findings });
+  sendQaFindings(pid, t, findings);
+}
+function sendQaFindings(pid, t, findings) {
+  const p = projects.get(pid);
+  setTicket(p, t, 'review_kode', 'QA menemukan masalah');
   t.holder = 'sa';
   addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `QA menemukan masalah di ${t.id}; dikembalikan ke SA untuk diperbaiki Programmer.` });
-  const findings = failed.map(([n, q]) => `## QA ${n}\nTemuan: ${q.temuan}\nHasil: ${q.hasil}`).join('\n\n');
   workerFor(pid, 'sa').enqueue(`[Dari QA] ${t.id} GAGAL uji. Analisa temuannya, lalu minta_perbaikan ke Programmer yang tepat (0 = semua). Setelah diperbaiki dan lolos review, aplikasi dijalankan dan QA menguji ulang.\n\n${findings}`);
 }
 
@@ -781,9 +912,9 @@ function toPM(pid, t, note) {
   const p = projects.get(pid);
   setTicket(p, t, 'laporan', note);
   t.holder = 'pm';
-  const how = t.work.repos.map((r) => `- ${r.name} (${r.src}): git diff ${t.work.base[r.name]?.branch || 'HEAD'}...ahq/${t.id}`).join('\n');
+  const how = t.work.repos.map((r) => `- ${r.name} (${r.src}): git diff ${t.work.base[r.name]?.branch || 'HEAD'}...${tb(t)}`).join('\n');
   addChat(pid, { from: 'system', kind: 'work', ticket: t.id, text: `${t.id} lulus. PM menyiapkan laporan untukmu.` });
-  workerFor(pid, 'pm').enqueue(`[Sistem] ${t.id} selesai dikerjakan dan ${note}\n\nLaporkan ke pengguna dengan lapor: apa yang berubah, hasil QA, branch hasilnya (ahq/${t.id}), dan cara melihat perubahannya:\n${how}\nTanyakan apakah pengguna menerimanya. Panggil selesaikan_tiket hanya setelah pengguna menyatakan menerima. Merge dilakukan pengguna sendiri.\n\n---\n${ticketText(p, t)}`);
+  workerFor(pid, 'pm').enqueue(`[Sistem] ${t.id} selesai dikerjakan dan ${note}\n\nLaporkan ke pengguna dengan lapor: apa yang berubah, hasil QA, branch hasilnya (${tb(t)}), dan cara melihat perubahannya:\n${how}\nTanyakan apakah pengguna menerimanya. Panggil selesaikan_tiket hanya setelah pengguna menyatakan menerima. Merge dilakukan pengguna sendiri.\n\n---\n${ticketText(p, t)}`);
 }
 
 // Remove the ticket's worktrees but keep its branches for the user to merge.
@@ -799,7 +930,7 @@ function cleanupWorktrees(pid, t) {
   for (const d of dirs) for (const r of t.work.repos) removeWorktree(r.src, path.join(root, d, r.name));
   fs.rmSync(root, { recursive: true, force: true });
   for (const k of [...workers.keys()]) if (workers.get(k).opts?.ticket === t.id && workers.get(k).pid === pid && !workers.get(k).busy) workers.delete(k);
-  return `ahq/${t.id}`;
+  return `${tb(t)}`;
 }
 
 // Continue a ticket whose agents were interrupted (e.g. the orchestrator restarted). Only on the user's request.
@@ -847,6 +978,7 @@ function snapshot(pid) {
     chat: p.state.chat.slice(-200),
     tickets: p.state.tickets,
     pending: [...pending.values()].filter((r) => r.pid === pid).map(({ resolve, ...r }) => r),
+    remembered: p.state.remembered,
     paused: Object.fromEntries(ENGINES.filter((e) => Date.now() < pausedUntil[e]).map((e) => [e, pausedUntil[e]])),
     active,
     maxActive: MAX_ACTIVE,
@@ -887,11 +1019,22 @@ const modelCache = {};
 async function modelsFor(engine, refresh) {
   const c = modelCache[engine];
   if (c && !refresh && Date.now() - c.t < 10 * 60 * 1000) return c.models;
+  if (engine === 'opencode') opencodeLastUsed = Date.now(); // listing models starts the opencode server
   const models = await MODEL_LISTERS[engine]();
   modelCache[engine] = { t: Date.now(), models };
   return models;
 }
 
+function cleanBrief(b) {
+  const txt = (v, n) => String(v || '').trim().slice(0, n);
+  return {
+    jenis: PROJECT_KINDS.includes(b.jenis) ? b.jenis : '',
+    tujuan: txt(b.tujuan, 2000),
+    jalankan: txt(b.jalankan, 600),
+    uji: txt(b.uji, 600),
+    aturan: txt(b.aturan, 2000),
+  };
+}
 function cleanFolders(list) {
   const out = [];
   for (const f of Array.isArray(list) ? list : []) {
@@ -987,7 +1130,7 @@ const server = http.createServer(async (req, res) => {
       const id = slug(b.name);
       const eng = engines();
       const engine = ENGINES.find((e) => eng[e].available) || 'claude';
-      const meta = { id, name: clip(b.name, 60), folders: cleanFolders(b.folders), roles: { pm: { engine, model: '' } }, created: Date.now() };
+      const meta = { id, name: clip(b.name, 60), folders: cleanFolders(b.folders), brief: cleanBrief(b.brief || {}), roles: { pm: { engine, model: '' } }, created: Date.now() };
       projects.set(id, { meta, state: { chat: [], tickets: [], seq: { t: 0, q: 0, m: 0 }, remembered: [] }, sessions: {} });
       save(id);
       return ok(meta);
@@ -1001,6 +1144,7 @@ const server = http.createServer(async (req, res) => {
       if (!b) return bad(400, 'JSON tidak valid');
       if (b.name) p.meta.name = clip(b.name, 60);
       if (b.folders) p.meta.folders = cleanFolders(b.folders);
+      if (b.brief) p.meta.brief = cleanBrief(b.brief);
       if (b.roles) for (const [role, cfg] of Object.entries(b.roles)) {
         if (!ROLES[role] || !ENGINES.includes(cfg.engine)) continue;
         p.meta.roles[role] = { engine: cfg.engine, model: clip(cfg.model || '', 80) };
@@ -1026,6 +1170,7 @@ const server = http.createServer(async (req, res) => {
       const text = String(b?.text || '').trim();
       if (!text) return bad(400, 'pesan kosong');
       if (!p.meta.folders.length) return bad(400, 'Tambahkan minimal satu folder project dulu.');
+      if (!hasBrief(p.meta)) return bad(400, 'Isi ringkasan project dulu (jenis dan tujuan) di ⚙️ Pengaturan project. Tanpa itu agent tidak punya konteks.');
       addChat(pid, { from: 'user', kind: 'message', text });
       workerFor(pid, 'pm').enqueue(text);
       return ok({ ok: true });
@@ -1055,6 +1200,20 @@ const server = http.createServer(async (req, res) => {
       }
       return ok({ ok: true });
     }
+    if (action === 'decide' && req.method === 'POST') {
+      const b = await body(req);
+      if (!['more', 'accept', 'stop'].includes(b?.decision)) return bad(400, 'decision: more | accept | stop');
+      const t = ticketOf(p, b.ticket);
+      return t && decideEscalation(pid, t, b.decision) ? ok({ ok: true }) : bad(400, 'tiket tidak sedang menunggu keputusanmu');
+    }
+    if (action === 'remembered' && req.method === 'POST') {
+      const b = await body(req);
+      const before = p.state.remembered.length;
+      p.state.remembered = b?.all ? [] : p.state.remembered.filter((r) => !(r.role === b?.role && r.key === b?.key));
+      save(pid);
+      emit(pid);
+      return ok({ removed: before - p.state.remembered.length });
+    }
     if (action === 'resume' && req.method === 'POST') {
       const b = await body(req);
       const t = ticketOf(p, b?.ticket);
@@ -1064,6 +1223,13 @@ const server = http.createServer(async (req, res) => {
       const b = await body(req);
       if (!['approve', 'revise'].includes(b?.decision)) return bad(400, 'decision: approve | revise');
       if (b.decision === 'revise' && !String(b.note || '').trim()) return bad(400, 'Tulis catatan revisinya.');
+      // Agents start from the last commit: warn before they miss uncommitted work.
+      const t = ticketOf(p, b.ticket);
+      if (b.decision === 'approve' && t?.status === 'menunggu_persetujuan' && !b.force) {
+        const dirty = reposFor(p, t).map((r) => ({ repo: path.basename(r), files: dirtyFiles(r) })).filter((d) => d.files.length);
+        if (dirty.length) return send(res, 409, { dirty: dirty.map((d) => ({ repo: d.repo, count: d.files.length, sample: d.files.slice(0, 8) })) }, origin);
+      }
+      if (b.decision === 'approve' && b.force && t) addChat(pid, { from: 'system', kind: 'error', ticket: t.id, text: `Rencana ${t.id} disetujui walaupun repo punya perubahan yang belum di-commit. Agent bekerja dari commit terakhir dan tidak melihat perubahan itu.` });
       return decidePlan(pid, b.ticket, b.decision, b.note) ? ok({ ok: true }) : bad(400, 'rencana tidak sedang menunggu keputusan');
     }
   }

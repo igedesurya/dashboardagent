@@ -170,7 +170,7 @@ const COMMON = `## Aturan bersama
 - Pesan dari peran lain datang sebagai pesan biasa berawalan "[Dari PM]", "[Dari BA]", dan seterusnya. Gunakan \`baca_tiket\` untuk konteks lengkap.
 - Tim lengkap: PM, BA, SA, Programmer, QA.`;
 
-export function instructions(role, project, opts = {}) {
+function roleInstructions(role, project, opts = {}) {
   const folders = project.folders.map((f) => `- ${f}`).join('\n') || '- (belum ada folder)';
   const head = (title) => `# Peranmu: ${title} untuk project "${project.name}"
 
@@ -227,7 +227,7 @@ ${COMMON}`;
 
 Folder kerjamu berisi worktree git untuk tiket ini, satu subfolder per repo:
 ${repos}
-${run ? `Ini branch tiket \`ahq/${t}\` yang sudah berisi gabungan kerja semua Programmer dan lolos review SA.` : `Ini branch milikmu sendiri (\`ahq/${t}-p${opts.inst}\`), terpisah dari folder kerja pengguna.`}
+${run ? `Ini branch tiket \`${opts.branch || 'ahq/' + t}\` yang sudah berisi gabungan kerja semua Programmer dan lolos review SA.` : `Ini branch milikmu sendiri (\`${opts.branch || 'ahq/' + t}-p${opts.inst}\`), terpisah dari folder kerja pengguna.`}
 
 ## Cara kerja
 ${run ? `1. Jalankan test dan/atau aplikasi sesuai rencana (lihat \`baca_tiket\`). Gunakan perintah yang selesai sendiri (test, build, atau start dengan batas waktu); jangan menjalankan server yang tidak pernah berhenti.
@@ -248,7 +248,7 @@ ${run ? `1. Jalankan test dan/atau aplikasi sesuai rencana (lihat \`baca_tiket\`
     const repos = (opts.repos || []).map((r) => `- ${r}`).join('\n') || '- (lihat folder kerjamu)';
     return `# Peranmu: QA ${opts.inst || ''} untuk tiket ${t}, project "${project.name}"
 
-Folder kerjamu berisi salinan branch tiket \`ahq/${t}\` (gabungan kerja Programmer yang sudah lolos review dan run), satu subfolder per repo:
+Folder kerjamu berisi salinan branch tiket \`${opts.branch || 'ahq/' + t}\` (gabungan kerja Programmer yang sudah lolos review dan run), satu subfolder per repo:
 ${repos}
 
 ## Cara kerja
@@ -264,4 +264,35 @@ ${repos}
 - Teks jawaban akhirmu tampil di chat dashboard pengguna; tulis singkat.`;
   }
   return '';
+}
+
+export const PROJECT_KINDS = ['software', 'tulisan', 'lainnya'];
+export const isSoftware = (project) => (project.brief?.jenis || 'software') === 'software';
+export const hasBrief = (project) => !!(project.brief?.jenis && String(project.brief?.tujuan || '').trim());
+
+// What every role must know about the project, written by the user in the project settings.
+function briefBlock(project, role) {
+  const b = project.brief || {};
+  const lines = ['## Tentang project ini (dari pengguna — pegang ini sebagai konteks utama)'];
+  lines.push(`- Jenis: ${b.jenis || '(belum diisi)'}`);
+  lines.push(`- Tujuan / isi project: ${b.tujuan || '(belum diisi)'}`);
+  if (b.jalankan) lines.push(`- Cara menjalankan: ${b.jalankan}`);
+  if (b.uji) lines.push(`- Cara menguji: ${b.uji}`);
+  if (b.aturan) lines.push(`- Aturan/konvensi: ${b.aturan}`);
+  lines.push('- Jangan menjelajah di luar folder project dan folder kerjamu. Data orchestrator (~/.agent-hq) dan project lain bukan urusanmu dan aksesnya ditolak.');
+  if (!isSoftware(project)) {
+    lines.push('', `**Project ini BUKAN software.** "Kode" berarti dokumen/naskah di folder project. Tidak ada aplikasi yang dijalankan, tidak ada test otomatis, dan tidak ada paket yang dipasang.`);
+    if (role === 'sa') lines.push('Rencanamu berisi dokumen mana yang diubah dan bagaimana; review berarti memeriksa isi, gaya, dan konsistensi.');
+    if (role === 'dev') lines.push('Tugasmu menulis/mengubah dokumen di worktree-mu. Abaikan instruksi tentang menjalankan aplikasi atau test.');
+    if (role === 'qa') lines.push('Tugasmu memeriksa isi dokumen terhadap use case/kriteria dengan MEMBACA, bukan menjalankan program. Laporkan temuan per kriteria.');
+    if (role === 'ba') lines.push('Use case berisi kriteria pemeriksaan isi (apa yang harus ada, konsisten, dan benar), bukan langkah menjalankan aplikasi.');
+  }
+  return lines.join('\n');
+}
+
+export function instructions(role, project, opts = {}) {
+  const base = roleInstructions(role, project, opts);
+  if (!base) return '';
+  const nl = base.indexOf('\n');
+  return `${base.slice(0, nl)}\n\n${briefBlock(project, role)}\n${base.slice(nl)}`;
 }

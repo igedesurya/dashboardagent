@@ -448,18 +448,23 @@ export function buildWorld(scene) {
       const p = cyl(g, rand(2.5, 6), rand(2.5, 6), 0.02, 7, Math.random() < 0.5 ? '#86cc68' : '#72b955', x, 0, z);
       p.castShadow = false;
     });
-    scatter(230, (x, z) => tree(x, z, rand(0.8, 1.5), Math.random() < 0.45));
-    scatter(90, (x, z) => {
+    // Outer nature is decoration only: fewer pieces, and no shadows (shadows are the costliest part to draw).
+    const before = g.children.length;
+    scatter(110, (x, z) => tree(x, z, rand(0.8, 1.5), Math.random() < 0.45));
+    for (const m of g.children.slice(before)) m.castShadow = false;
+    scatter(45, (x, z) => {
       const r = rand(0.4, 0.8);
       const b = ball(g, r, '#5aa846', x, r * 0.6, z, 0);
       b.scale.y = 0.8;
+      b.castShadow = false;
     });
-    scatter(45, (x, z) => {
+    scatter(25, (x, z) => {
       const r = rand(0.3, 0.9);
       const rock = ball(g, r, '#a8a29e', x, r * 0.35, z, 0);
       rock.scale.y = 0.6;
+      rock.castShadow = false;
     });
-    scatter(60, (cx, cz) => {
+    scatter(30, (cx, cz) => {
       for (let i = 0; i < 4; i++) {
         const b = ball(g, 0.1, flowerCols[i % flowerCols.length], cx + rand(-0.7, 0.7), 0.22, cz + rand(-0.7, 0.7));
         b.castShadow = false;

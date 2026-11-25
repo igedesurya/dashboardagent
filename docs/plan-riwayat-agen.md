@@ -21,6 +21,8 @@ Di `tick()` di `server.js`, bandingkan snapshot baru dengan snapshot sebelumnya 
 - Abaikan kemunculan pertama sebuah `id` pada proses ini (bukan “perubahan”).
 - Saat `id` hilang dari snapshot, jangan membuat baris “offline”. Hapus juga buffer id itu supaya memori tidak tumbuh.
 
+Akibat yang disengaja: jendela waktu bisa diubah dari dashboard (`POST /api/settings`). Kalau diperkecil, agen yang keluar jendela hilang dari snapshot dan riwayatnya ikut terhapus. Kalau jendela diperbesar lagi, agen itu muncul sebagai kemunculan pertama dengan riwayat kosong. Ini bukan bug.
+
 Satu baris hanya: `t` (epoch ms), `state`, `task`. Tidak menyalin `model`, `tokens`, atau isi tool. Maksimal 20 baris per `id`. Baris ke-21 membuang yang paling lama.
 
 Simpan di satu `Map` di `server.js`, di samping `bots`. Jangan masukkan buffer ini ke objek yang dikembalikan `agentRecord()`.
@@ -29,7 +31,8 @@ Simpan di satu `Map` di `server.js`, di samping `bots`. Jangan masukkan buffer i
 
 `GET /api/agents/history?id=<id>`
 
-- `id` wajib, persis nilai `id` agen. Tolak kalau kosong atau mengandung karakter aneh di luar yang sudah dipakai id (`huruf, angka, :, _, -`). Balas `400`.
+- `id` wajib, persis nilai `id` agen. Tolak dengan `400` hanya kalau kosong atau lebih dari 200 karakter. Jangan membatasi jenis karakter: id bot adalah `<source>:<nama>` dan nama bot teks bebas sampai 16 karakter, misalnya `grok:Grok Bot` yang berisi spasi. Id hanya dipakai sebagai kunci `Map`, tidak pernah menjadi path file atau query SQL, jadi tidak ada risiko injeksi.
+- Browser mengirim id lewat `encodeURIComponent`. Server membaca lewat `url.searchParams.get('id')`, yang sudah men-decode.
 - Ditemukan: `200` dan `{ id, events }` dengan `events` urut dari yang terlama ke yang terbaru. Kosong berarti `[]`, bukan `404`.
 - Jangan menambah rute dengan path dinamis selain query `id`. Server sekarang mencocokkan `pathname` persis; query menjaga pencocokan itu tetap sederhana.
 
@@ -57,9 +60,12 @@ Gaya daftar memakai markup yang sudah ada di kartu. Jangan menambah panel baru.
 ## Cek selesai
 
 1. `GET /api/agents` dan event SSE tidak berisi `events` atau field baru.
+   Endpoint baru `/api/agents/history` tidak bentrok dengan `/api/agents`, karena server mencocokkan `pathname` persis.
 2. Dua tick dengan `state` dan `task` yang sama tidak menambah baris.
 3. Perubahan `task` menambah satu baris. Baris ke-21 menghapus yang pertama.
 4. Id yang hilang dari snapshot ikut terhapus dari `Map`.
 5. Restart proses: `events` untuk id itu `[]`.
 6. Kartu live menampilkan daftar. Demo tidak memanggil endpoint.
 7. Folder data agen tidak mendapat file baru.
+8. Bot dengan spasi di namanya (`POST /api/events` dengan `agent: "Bot Uji"`) bisa dibuka riwayatnya, bukan `400`.
+9. Memperkecil jendela waktu sampai sebuah agen hilang menghapus riwayatnya dari `Map`.

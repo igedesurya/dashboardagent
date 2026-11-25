@@ -74,6 +74,12 @@ export function mergeInto(intDir, branch, message) {
   return { ok: false, conflicts: conflicts || r.out };
 }
 
+// Uncommitted and untracked files (agents start from the last commit and will not see these).
+export function dirtyFiles(repo) {
+  const r = tryGit(repo, 'status', '--porcelain', '--untracked-files=all');
+  return r.ok ? r.out.split('\n').filter(Boolean).map((l) => l.slice(3)) : [];
+}
+
 export function currentRef(repo) {
   const b = tryGit(repo, 'rev-parse', '--abbrev-ref', 'HEAD').out;
   return { branch: b, commit: git(repo, 'rev-parse', 'HEAD') };

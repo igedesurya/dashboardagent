@@ -312,3 +312,23 @@ Selesai dan diuji ujung ke ujung dengan opencode (`9router/model-loop-gpt-oss`) 
 - `selesaikan_tiket` menghapus semua worktree tiket; branch `ahq/<tiket>` tetap ada untuk di-merge pengguna.
 - Rencana SA tanpa QA (`qa: 0`) langsung ke laporan PM.
 - Uji simulasi (`AHQ_DRY_RUN=1`, langkah agent dikirim lewat rute MCP yang sama, git asli): 21 cek lulus, termasuk konflik penggabungan, QA gagal lalu lulus, larangan edit QA, dan pembersihan worktree.
+
+## Perbaikan setelah uji manual (agen bingung, akses ke mana-mana, aplikasi berat)
+
+1. **Ringkasan project wajib**: jenis (software/tulisan/lainnya), tujuan, cara menjalankan, cara menguji, aturan. Chat ke PM ditolak sebelum ringkasan diisi. Ringkasan disisipkan ke instruksi setiap peran. Project non-software melewati tahap run aplikasi.
+2. **Peringatan repo belum di-commit**: menyetujui rencana saat folder punya perubahan yang belum di-commit akan memunculkan peringatan (409) dan konfirmasi, karena worktree dibuat dari commit terakhir.
+3. **Kunci akses**:
+   - Folder data Agent HQ dan folder project lain selalu ditolak.
+   - Perintah terminal yang menyentuh path di luar folder project ditanyakan.
+   - `kill`/`pkill` ditolak untuk peran baca-saja dan QA.
+   - "Selalu izinkan" berlaku per peran dan tidak tersedia untuk aksi berisiko (sudo, rm -rf, deploy, rahasia, git berisiko).
+   - Izin yang tersimpan bisa dilihat dan dicabut di pengaturan project.
+4. **Proses agen menganggur dimatikan** setelah 5 menit (`AHQ_IDLE_MIN`), termasuk `opencode serve` bersama. Pengaturan tim memberi peringatan untuk model berat.
+5. **Mode ringan 3D** (tombol 🪶, aktif bawaan): 15 fps, tanpa bayangan, pixel ratio 1, berhenti saat tab tersembunyi. Dekorasi luar dikurangi. Server editor hanya memindai saat ada penonton.
+6. **Batas putaran**:
+   - Batasnya 2 putaran perbaikan review dan 2 putaran QA.
+   - Setelah batas tercapai, tiket berstatus `butuh_keputusan` dengan kartu pilihan: lanjut 1 putaran, terima apa adanya, atau hentikan tiket.
+
+Nama branch sekarang memuat id project (`ahq/<project>/<tiket>`, `…-p<n>`). Sebelumnya dua project yang memakai repo yang sama bertabrakan di `ahq/T-001`. Tiket lama tetap memakai nama yang tersimpan di tiketnya.
+
+Uji simulasi: semua cek lulus, termasuk ringkasan, 409, project tulisan, dan eskalasi review/QA. Tes engine Gemini: 12/12 lulus. Kartu eskalasi juga dicek di browser.

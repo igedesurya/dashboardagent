@@ -13,12 +13,12 @@ const ENGINE_ORDER = ['claude', 'opencode', 'cursor', 'gemini'];
 const WAITING_YOU = 'menunggu jawabanmu';
 const WORK_ST = new Set(['dikerjakan', 'review_kode', 'perbaikan', 'run_aplikasi', 'testing']);
 const isWorking = (a) => a && !['idle', 'error'].includes(a.state) && a.task !== WAITING_YOU;
-const STATUS_COLOR = { testing: '#f2a20c', laporan: '#d97757', dikerjakan: '#9b6bff', review_kode: '#4f8cff', perbaikan: '#f2a20c', run_aplikasi: '#9b6bff', siap_qa: '#14b8c4', baru: '#8a8f98', tanya_pengguna: '#f2a20c', tunggu_klien: '#9b6bff', analisa_bisnis: '#1fa774', analisa_teknis: '#4f8cff', menunggu_persetujuan: '#e5484d', siap_dikerjakan: '#14b8c4', siap: '#14b8c4', selesai: '#1fa774', gagal: '#e5484d' };
+const STATUS_COLOR = { butuh_keputusan: '#e5484d', testing: '#f2a20c', laporan: '#d97757', dikerjakan: '#9b6bff', review_kode: '#4f8cff', perbaikan: '#f2a20c', run_aplikasi: '#9b6bff', siap_qa: '#14b8c4', baru: '#8a8f98', tanya_pengguna: '#f2a20c', tunggu_klien: '#9b6bff', analisa_bisnis: '#1fa774', analisa_teknis: '#4f8cff', menunggu_persetujuan: '#e5484d', siap_dikerjakan: '#14b8c4', siap: '#14b8c4', selesai: '#1fa774', gagal: '#e5484d' };
 
 async function api(method, p, body) {
   const r = await fetch(ORCH + p, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status, data: j });
   return j;
 }
 
@@ -159,6 +159,13 @@ export function initProjectMode(hooks) {
     head.innerHTML = `<div class="cp-title"><b>${esc(snap.project.name)}</b><small>${snap.project.folders.length} ${esc(t('proj.folders'))} · ${esc(t('proj.active', { n: snap.active, max: snap.maxActive }))}</small></div><div class="team">${team}</div>`;
     if (paused.length) head.innerHTML += `<div class="cp-pause">☕ ${esc(t('proj.paused', { e: paused.map(([e, ts]) => `${e} ${hhmm(ts)}`).join(', ') }))}</div>`;
     foot.hidden = tab !== 'chat';
+    const needBrief = !(snap.project.brief?.jenis && snap.project.brief?.tujuan);
+    if (needBrief && tab === 'chat') {
+      body.innerHTML = `<div class="cp-empty"><b>${esc(t('brief.needTitle'))}</b><p>${esc(t('brief.needHint'))}</p><button id="cpBrief" class="primary">${esc(t('brief.fill'))}</button></div>`;
+      $('#cpBrief', body).onclick = () => openModal(state.projects.find((p) => p.id === projectId) || snap.project);
+      foot.hidden = true;
+      return;
+    }
     $('#cpStop', chat).hidden = !working.length;
     if (tab === 'tickets') {
       const open = new Set([...body.querySelectorAll('details[open]')].map((d) => d.dataset.tk));
@@ -191,6 +198,13 @@ export function initProjectMode(hooks) {
     const time = `<time>${hhmm(m.t)}</time>`;
     if (m.from === 'system' && m.kind === 'handoff') return `<div class="msg sys handoff">${time} <b style="color:${ROLE_COLOR[m.by]}">${esc(ROLE_LABEL[m.by])}</b> → <b style="color:${ROLE_COLOR[m.to]}">${esc(ROLE_LABEL[m.to])}</b> <span class="tkid">${esc(m.ticket)}</span> ${esc(m.text.replace(/^[^:]+:\s*/, ''))}</div>`;
     if (m.from === 'system' && m.kind === 'work') return `<div class="msg sys work">${time} 🛠️ ${md(m.text)}</div>`;
+    if (m.kind === 'escalation') {
+      const tk = snap.tickets.find((x) => x.id === m.ticket);
+      const open = !m.decision && tk?.status === 'butuh_keputusan';
+      const btns = open ? `<div class="perm-btns" data-esc="${esc(m.ticket)}"><button data-ed="more">${esc(t('esc.more'))}</button><button data-ed="accept">${esc(t('esc.accept'))}</button><button data-ed="stop" class="no">${esc(t('esc.stop'))}</button></div>` : '';
+      const done = m.decision ? `<div class="dec ${m.decision === 'stop' ? 'deny' : 'once'}">${esc(t('esc.done.' + m.decision))}</div>` : '';
+      return `<div class="msg card perm ${open ? 'open' : ''}"><div class="card-h">⏸️ <b>${esc(t(m.esc === 'qa' ? 'esc.titleQa' : 'esc.titleReview'))}</b> <span class="tkid">${esc(m.ticket)}</span>${time}</div><div class="plan-text">${md(m.text)}</div><small>${esc(t('esc.hint'))}</small>${btns}${done}</div>`;
+    }
     if (m.from === 'system') return `<div class="msg sys ${m.kind}">${time} ${md(m.text)}</div>`;
     if (m.kind === 'qa') return `<div class="msg card qa ${m.pass ? 'pass' : 'fix'}"><div class="card-h">🧪 <b style="color:${ROLE_COLOR.qa}">${esc(who)}</b> ${esc(t(m.pass ? 'qa.pass' : 'qa.fail'))} <span class="tkid">${esc(m.ticket)}</span>${time}</div><div class="plan-text">${md(m.text)}</div></div>`;
     if (m.kind === 'review') return `<div class="msg card review ${m.verdict}"><div class="card-h">🔍 <b style="color:${ROLE_COLOR.sa}">SA</b> ${esc(t(m.verdict === 'pass' ? 'review.pass' : 'review.fix'))} <span class="tkid">${esc(m.ticket)}</span>${time}</div>${md(m.text)}</div>`;
@@ -211,7 +225,7 @@ export function initProjectMode(hooks) {
     if (m.kind === 'permission') {
       const open = pendingIds.has(m.permission);
       const done = m.decision ? `<div class="dec ${m.decision}">${esc(t('perm.done.' + m.decision))}</div>` : open ? '' : `<div class="dec">${esc(t('perm.expired'))}</div>`;
-      const btns = open ? `<div class="perm-btns" data-p="${esc(m.permission)}"><button data-d="once">${esc(t('perm.once'))}</button><button data-d="always">${esc(t('perm.always'))}</button><button data-d="deny" class="no">${esc(t('perm.deny'))}</button></div>` : '';
+      const btns = open ? `<div class="perm-btns" data-p="${esc(m.permission)}"><button data-d="once">${esc(t('perm.once'))}</button>${m.rememberable ? `<button data-d="always" title="${esc(t('perm.alwaysHint', { who }))}">${esc(t('perm.alwaysScoped', { who }))}</button>` : ''}<button data-d="deny" class="no">${esc(t('perm.deny'))}</button></div>` : '';
       return `<div class="msg card perm ${open ? 'open' : ''}"><div class="card-h">🔐 <b>${esc(who)}</b> ${esc(t('perm.asks'))}${time}</div><div>${esc(m.text)}</div><small>${esc(t('perm.reason'))}: ${esc(m.reason || '')}</small>${btns}${done}</div>`;
     }
     if (m.kind === 'report') return `<div class="msg card rep"><div class="card-h">📋 <b>${esc(who)}</b> ${esc(t('proj.report'))} ${m.ticket ? `<span class="tkid">${esc(m.ticket)}</span>` : ''}${time}</div>${md(m.text)}</div>`;
@@ -262,6 +276,19 @@ export function initProjectMode(hooks) {
     }
   });
   chat.addEventListener('click', async (e) => {
+    const ed = e.target.closest('[data-ed]');
+    if (ed) {
+      const box = ed.parentElement;
+      if (ed.dataset.ed === 'stop' && !confirm(t('esc.stopConfirm'))) return;
+      for (const x of box.querySelectorAll('button')) x.disabled = true;
+      try {
+        await api('POST', `/api/projects/${projectId}/decide`, { ticket: box.dataset.esc, decision: ed.dataset.ed });
+      } catch (err) {
+        alert(err.message);
+        for (const x of box.querySelectorAll('button')) x.disabled = false;
+      }
+      return;
+    }
     const rs = e.target.closest('[data-resume]');
     if (rs) {
       rs.disabled = true;
@@ -278,7 +305,17 @@ export function initProjectMode(hooks) {
       try {
         await api('POST', `/api/projects/${projectId}/plan`, { ticket: ap.dataset.tk, decision: 'approve' });
       } catch (err) {
-        alert(err.message);
+        if (err.status === 409 && err.data?.dirty) {
+          const list = err.data.dirty.map((d) => `• ${d.repo}: ${d.count} file (${d.sample.join(', ')}${d.count > d.sample.length ? ', …' : ''})`).join('\n');
+          if (confirm(t('plan.dirty', { list }))) {
+            try {
+              await api('POST', `/api/projects/${projectId}/plan`, { ticket: ap.dataset.tk, decision: 'approve', force: true });
+              return;
+            } catch (e2) {
+              alert(e2.message);
+            }
+          }
+        } else alert(err.message);
         ap.disabled = false;
       }
       return;
@@ -365,7 +402,7 @@ export function initProjectMode(hooks) {
       const r = state.roles?.[role] || {};
       const cfg = roleCfg(role);
       const later = r.active === false ? `<small class="later">${esc(t('proj.roleLater', { n: r.stage }))}</small>` : '';
-      const err = models[cfg.engine]?.error ? `<small class="err">${esc(t('proj.modelsError'))}</small>` : '';
+      const err = models[cfg.engine]?.error ? `<small class="err">${esc(t('proj.modelsError'))}</small>` : /opus/i.test(cfg.model || '') ? `<small class="err">⚠️ ${esc(t('proj.heavyModel'))}</small>` : '';
       return `<div class="role-row" data-role="${role}"><div class="role-name" style="--c:${ROLE_COLOR[role]}">${esc(ROLE_LABEL[role])}${later}</div>
         <select class="r-engine">${engOpts(cfg.engine)}</select>
         <span class="modelrow">${modelSelect(cfg.engine, cfg.model, role)}<button type="button" class="r-reload" title="${esc(t('proj.modelsReload'))}">↻</button></span>${err}</div>`;
@@ -376,10 +413,27 @@ export function initProjectMode(hooks) {
         <ul class="flist">${draft.folders.map((f, i) => `<li><span title="${esc(f)}">📁 ${esc(f.replace(/^\/Users\/[^/]+/, '~'))}</span><button data-rm="${i}">✕</button></li>`).join('') || `<li class="muted">${esc(t('proj.noFolders'))}</li>`}</ul>
         ${browse ? renderBrowser() : `<button id="pmAdd">＋ ${esc(t('proj.addFolder'))}</button>`}
       </div>
+      <div class="pm-sec brief"><b>${esc(t('brief.title'))}</b><small>${esc(t('brief.hint'))}</small>
+        <label>${esc(t('brief.kind'))} *<select id="bJenis"><option value="">—</option>${['software', 'tulisan', 'lainnya'].map((k) => `<option value="${k}" ${draft.brief?.jenis === k ? 'selected' : ''}>${esc(t('brief.kind.' + k))}</option>`).join('')}</select></label>
+        <label>${esc(t('brief.goal'))} *<textarea id="bTujuan" rows="3" placeholder="${esc(t('brief.goalPh'))}">${esc(draft.brief?.tujuan || '')}</textarea></label>
+        ${draft.brief?.jenis === 'software' || !draft.brief?.jenis ? `<label>${esc(t('brief.run'))}<input id="bJalankan" value="${esc(draft.brief?.jalankan || '')}" placeholder="npm run dev · flutter run"></label>
+        <label>${esc(t('brief.test'))}<input id="bUji" value="${esc(draft.brief?.uji || '')}" placeholder="npm test · flutter test"></label>` : ''}
+        <label>${esc(t('brief.rules'))}<textarea id="bAturan" rows="2" placeholder="${esc(t('brief.rulesPh'))}">${esc(draft.brief?.aturan || '')}</textarea></label>
+      </div>
       <div class="pm-sec"><b>${esc(t('proj.teamTitle'))}</b><small>${esc(t('proj.teamHint'))}</small>
         <div class="role-head"><span></span><span>${esc(t('proj.engine'))}</span><span>${esc(t('proj.model'))}</span></div>
         ${rows}
-      </div>`;
+      </div>
+      ${draft.id ? renderRemembered() : ''}`;
+    for (const [id, field] of [['bJenis', 'jenis'], ['bTujuan', 'tujuan'], ['bJalankan', 'jalankan'], ['bUji', 'uji'], ['bAturan', 'aturan']]) {
+      const el = $('#' + id, modal);
+      if (!el) continue;
+      el.oninput = el.onchange = () => {
+        draft.brief = { ...(draft.brief || {}), [field]: el.value };
+        if (field === 'jenis') renderModal();
+      };
+    }
+    for (const b of modal.querySelectorAll('[data-forget]')) b.onclick = () => forget(JSON.parse(b.dataset.forget));
     const name = $('#pmName', modal);
     name.oninput = () => (draft.name = name.value);
     for (const row of modal.querySelectorAll('.role-row')) {
@@ -408,6 +462,23 @@ export function initProjectMode(hooks) {
       renderModal();
     });
   }
+  // "Always allow" entries of this project, per role, removable.
+  function renderRemembered() {
+    const list = (snap?.project?.id === draft.id && snap.remembered) || [];
+    const rows = list.map((r) => `<li><span title="${esc(r.key)}"><b style="color:${ROLE_COLOR[r.role]}">${esc(ROLE_LABEL[r.role])}</b> · ${esc(r.summary || r.key)}</span><button data-forget="${esc(JSON.stringify({ role: r.role, key: r.key }))}">✕</button></li>`).join('');
+    return `<div class="pm-sec"><b>${esc(t('perm.savedTitle'))}</b><small>${esc(t('perm.savedHint'))}</small>
+      <ul class="flist">${rows || `<li class="muted">${esc(t('perm.savedNone'))}</li>`}</ul>
+      ${list.length > 1 ? `<button data-forget='{"all":true}'>${esc(t('perm.savedClear'))}</button>` : ''}</div>`;
+  }
+  async function forget(what) {
+    try {
+      await api('POST', `/api/projects/${draft.id}/remembered`, what);
+      setTimeout(renderModal, 300);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
   function renderBrowser() {
     const crumbs = browse.path.replace(/^\/Users\/[^/]+/, '~');
     return `<div class="fbrowser"><div class="fb-head">${browse.parent ? `<button data-go="${esc(browse.parent)}">⬆</button>` : ''}<span title="${esc(browse.path)}">${esc(crumbs)}</span>${browse.git ? '<span class="git">git</span>' : ''}</div>
@@ -425,10 +496,11 @@ export function initProjectMode(hooks) {
   $('#pmCancel').addEventListener('click', () => (modal.hidden = true));
   $('#pmSave').addEventListener('click', async () => {
     if (!draft.name.trim()) return alert(t('proj.needName'));
+    if (!draft.brief?.jenis || !String(draft.brief?.tujuan || '').trim()) return alert(t('brief.needSave'));
     try {
       let p = draft.id ? null : await api('POST', '/api/projects', { name: draft.name });
       const id = draft.id || p.id;
-      p = await api('PUT', `/api/projects/${id}`, { name: draft.name, folders: draft.folders, roles: draft.roles });
+      p = await api('PUT', `/api/projects/${id}`, { name: draft.name, folders: draft.folders, roles: draft.roles, brief: draft.brief });
       projectId = id;
       modal.hidden = true;
       hooks.resetWorld();

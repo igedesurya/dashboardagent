@@ -1,6 +1,6 @@
 # Plan: filter proyek, sumber, dan status
 
-Boleh dikerjakan setelah `docs/plan-bentuk-agen.md` selesai. Boleh sejajar dengan plan notifikasi. Jangan digabung dengan plan riwayat.
+Plan ini murni di browser dan tidak memakai `agentRecord`, jadi tidak perlu menunggu `docs/plan-bentuk-agen.md`. Boleh sejajar dengan plan notifikasi. Jangan digabung dengan plan riwayat.
 
 Tujuan: pengguna menyembunyikan agen yang tidak ingin dilihat, tanpa mengubah data dari server.
 
@@ -29,12 +29,22 @@ Pilihan “semua” adalah default. Mengganti daftar agen tidak boleh mereset fi
 Agen yang tidak lolos:
 
 - tidak digambar di `#agentList`;
-- karakternya disembunyikan di scene (`visible = false` pada root), termasuk label;
-- tidak bisa dipilih. Kalau yang sedang dipilih tersembunyi, panggil `select(null)`.
+- karakternya disembunyikan di scene, termasuk label, tali pancing, dan pelampung (lihat di bawah);
+- tidak bisa dipilih, termasuk lewat klik di scene. Kalau yang sedang dipilih tersembunyi, panggil `select(null)`.
+
+### Yang perlu disembunyikan di three.js r160
+
+`root.visible = false` saja tidak cukup. Sudah dicek di source three@0.160.0:
+
+- `CSS2DRenderer` hanya melihat `visible` milik objek label sendiri, bukan induknya. Set juga `a.label.visible = false`, kalau tidak, nama dan gelembung tetap tampil.
+- `Raycaster` tidak memeriksa `visible`. `pickAgent()` harus melewati agen yang tidak lolos filter, kalau tidak, agen tersembunyi tetap bisa diklik.
+- `a.line` dan `a.bobber` (pancing) dipasang langsung ke scene, bukan ke root. `Agent.update()` menyalakannya lagi tiap frame saat aksi `fish`. Beri `Agent` satu flag (misalnya `hidden`) yang dicek di `update()` sebelum menyalakan keduanya.
+
+Semua ini di satu tempat: method kecil `setHidden(v)` di `Agent` yang mengatur root, label, dan flag pancing. Jangan menyebar `visible = ...` di `main.js`.
 
 Agen yang lolos tetap di posisi dan statusnya. Jangan memanggil `place()` hanya karena filter berubah.
 
-`#count` di judul panel menampilkan jumlah yang lolos filter, bukan jumlah total. Chip top bar tetap total.
+`#count` ada di tombol 👥 di top bar, bukan di judul panel. Tanpa filter aktif, ia tetap menampilkan total. Dengan filter aktif, ia menampilkan `lolos/total` (misalnya `3/14`), supaya terlihat ada agen yang disembunyikan. Chip status di top bar tetap total.
 
 Daftar kosong karena filter (masih ada agen, tapi tidak ada yang lolos) memakai kalimat i18n yang berbeda dari `panel.empty` (memang tidak ada agen).
 
@@ -44,7 +54,7 @@ Satu objek `filter` dan satu fungsi `matchFilter(agent)` di `mockup/main.js`. `r
 
 Jangan buat file `filter.js`. Aturan filternya tiga perbandingan.
 
-UI: tiga `<select>` di bagian atas `#panel` di `index.html`, di bawah judul panel. Gaya boleh memakai `.winbox select` yang sudah ada. Opsi diisi dari `main.js` setiap kali `renderList` jalan.
+UI: tiga `<select>` di bagian atas `#panel` di `index.html`, di bawah judul panel. Panel tertutup secara bawaan; filter tetap berlaku walau panel ditutup, dan `#count` memberi tanda bahwa filter aktif. Gaya boleh memakai `.winbox select` yang sudah ada. Opsi diisi dari `main.js` setiap kali `renderList` jalan.
 
 Simpan pilihan di `localStorage` dengan satu kunci, misalnya `agent-hq-filter`, berisi `{ state, source, project }`. Nilai “semua” disimpan sebagai string kosong. Pola simpan yang sama seperti pilihan jendela waktu yang sudah ada di `main.js`; jangan membuat helper storage umum hanya untuk ini.
 
@@ -63,5 +73,7 @@ Teks opsi “Semua” dan pesan daftar kosong masuk `i18n.js` (`id` dan `en`). L
 3. Filter sumber `cursor` dan proyek tertentu sekaligus hanya menampilkan irisan keduanya.
 4. Reload halaman mengembalikan filter yang terakhir dipilih.
 5. Agen tersembunyi yang kemudian lolos (filter diubah) muncul lagi tanpa pindah zona.
-6. Response `/api/agents` tidak berubah.
-7. Layar sempit (lebar di bawah 760px): ketiga select tetap bisa dipakai di panel bawah.
+6. Agen tersembunyi tidak menyisakan label, gelembung, atau tali pancing, dan klik di posisinya tidak memilih apa pun.
+7. Dengan filter aktif, tombol 👥 menampilkan `lolos/total`.
+8. Response `/api/agents` tidak berubah.
+9. Layar sempit (lebar di bawah 760px): ketiga select tetap bisa dipakai di panel bawah.

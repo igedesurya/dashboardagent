@@ -474,7 +474,9 @@ function collect() {
 
 const clients = new Set();
 let snapshot = '[]';
+let lastTick = 0;
 function tick() {
+  lastTick = Date.now();
   let next;
   try { next = JSON.stringify(collect()); } catch (e) { return console.error('scan gagal:', e.message); }
   if (next === snapshot) return;
@@ -482,7 +484,8 @@ function tick() {
   for (const res of clients) res.write(`data: ${snapshot}\n\n`);
 }
 tick();
-setInterval(tick, 2000);
+// Scan only while someone is watching (an open dashboard); otherwise the files stay untouched.
+setInterval(() => clients.size && tick(), 3000);
 setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 20000);
 
 // ---------- HTTP ----------
@@ -491,9 +494,13 @@ const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'applic
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
-  if (url.pathname === '/api/agents') return json(res, 200, snapshot);
+  if (url.pathname === '/api/agents') {
+    if (Date.now() - lastTick > 3000) tick();
+    return json(res, 200, snapshot);
+  }
   if (url.pathname === '/api/stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    if (Date.now() - lastTick > 3000) tick();
     res.write(`data: ${snapshot}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));

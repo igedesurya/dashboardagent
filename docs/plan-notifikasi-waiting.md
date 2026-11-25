@@ -1,8 +1,21 @@
 # Plan: notifikasi saat agen menunggu
 
-Kerjakan setelah `docs/plan-bentuk-agen.md` selesai. Plan ini tidak mengubah bentuk objek agen dan tidak menambah endpoint.
+Plan ini murni di browser, tidak mengubah bentuk objek agen, dan tidak menambah endpoint, jadi tidak perlu menunggu `docs/plan-bentuk-agen.md`. Boleh sejajar dengan plan filter.
 
 Tujuan: kalau sebuah agen berpindah ke `state: "waiting"` saat dashboard terbuka, browser memberi tahu pengguna. Status itu sudah berarti agen butuh jawaban atau izin.
+
+## Cakupan yang realistis
+
+Notifikasi hanya sebaik deteksi `waiting` di server, dan plan ini tidak mengubah server:
+
+| Sumber | Menghasilkan `waiting`? |
+|---|---|
+| Claude | Ya. Pasti untuk pertanyaan ke pengguna dan persetujuan rencana. Tebakan untuk izin tool: edit file yang menggantung lebih dari 15 detik. |
+| Grok Bot | Ya, dari penanda `awaitingUserResponse` aplikasi. |
+| Bot lewat `POST /api/events` | Ya, kalau bot mengirim `status: "waiting"`. |
+| Cursor, opencode | Tidak. Permintaan izin mereka tidak tercatat di file yang dibaca. Tidak ada notifikasi untuk dua sumber ini. |
+
+Memperbaiki deteksi Cursor dan opencode adalah pekerjaan server terpisah, bukan bagian plan ini.
 
 ## Bukan lingkup
 
@@ -20,7 +33,7 @@ Beri notifikasi hanya jika semua ini benar:
 
 1. Mode live (`live === true`). Mode demo tidak menembak notifikasi.
 2. Bukan snapshot pertama (`firstSnapshot` masih true saat agen pertama kali dipasang). Munculnya agen yang sudah `waiting` saat halaman dibuka tidak menembak notifikasi. Yang dihitung hanya transisi ke `waiting` setelah itu.
-3. `a.state` sebelumnya bukan `waiting`, dan state baru adalah `waiting`.
+3. `a.state` sebelumnya bukan `waiting`, dan state baru adalah `waiting`. Agen yang **baru muncul** setelah snapshot pertama dan langsung `waiting` juga dinotifikasi: ia butuh perhatian sama seperti agen lama yang berpindah. Ini sudah terjadi dengan sendirinya karena objek `Agent` baru dimulai dari `state` bawaan `idle`.
 4. Id yang sama tidak dinotifikasi lagi selama ia tetap `waiting`. Setelah pindah ke status lain lalu kembali ke `waiting`, boleh dinotifikasi sekali lagi.
 
 Isi notifikasi: nama agen, sumber, dan `task` (kalau `task` kosong, pakai teks i18n umum). Klik notifikasi memfokuskan tab dan memilih agen itu (`select`).
@@ -49,7 +62,9 @@ Tombol di top bar `mockup/index.html`, di samping kontrol yang sudah ada. Gaya m
 ## Cek selesai
 
 1. Buka dashboard live. Agen yang sudah `waiting` saat load tidak memunculkan notifikasi.
+   Uji paling mudah lewat bot: `POST /api/events` dengan `status: "running"`, buka dashboard, lalu kirim `status: "waiting"` untuk nama yang sama.
 2. Saat agen itu pindah ke `waiting` dari status lain, satu notifikasi muncul. Snapshot berikutnya yang masih `waiting` tidak menambah notifikasi lagi.
 3. Mode demo tidak memunculkan notifikasi.
-4. Izin ditolak: tidak ada error di konsol, tombol terlihat nonaktif.
-5. `server.js` dan `lib/agent.js` tidak berubah.
+4. Bot baru (nama yang belum pernah ada) yang dikirim langsung dengan `status: "waiting"` setelah halaman terbuka memunculkan satu notifikasi.
+5. Izin ditolak: tidak ada error di konsol, tombol terlihat nonaktif.
+6. `server.js` dan `lib/agent.js` tidak berubah.

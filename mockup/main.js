@@ -5,6 +5,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 import { buildWorld, HUB, DOOR } from './world.js';
 import { Agent, AGENTS, STATES, SOURCES, lookFor } from './agents.js';
 import { initI18n, lang, setLang, onLangChange, t, applyStatic, stateLabel } from './i18n.js';
+import { initProjectMode } from './project.js';
 initI18n();
 
 await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]);
@@ -12,7 +13,12 @@ await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500)
 // ---------- Renderer & kamera ----------
 const stage = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// Light mode (default on): 15 fps, no shadows, 1x resolution. Off: 30 fps, shadows, up to 1.5x resolution.
+let lite = true;
+try {
+  lite = localStorage.getItem('agent-hq-lite') !== '0';
+} catch {}
+renderer.setPixelRatio(lite ? 1 : Math.min(devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -68,7 +74,7 @@ resize();
 const hemi = new THREE.HemisphereLight('#cfe9ff', '#5a7a3a', 0.9);
 const sun = new THREE.DirectionalLight('#fff3dd', 2.2);
 sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 1, far: 200 });
 sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.03;
@@ -508,29 +514,65 @@ function startDemo() {
   ].forEach(([s, prefer], i) => assign(agents[i], s, true, prefer));
   agents.forEach((a, i) => (a.nextChange = 4 + i * 2.5));
 }
-try {
-  if (new URLSearchParams(location.search).has('demo')) throw 0;
-  const r = await fetch('/api/agents');
-  if (!r.ok) throw 0;
-  live = true;
-  applySnapshot(await r.json());
-  modeEl.innerHTML = '<i class="live"></i>' + t('app.live');
-  const es = new EventSource('/api/stream');
-  es.onmessage = (e) => {
+// Semua Editor: read-only view of every local editor session (or the demo when no server).
+let editorsES = null;
+let editorsWanted = false;
+async function connectEditors() {
+  editorsWanted = true;
+  try {
+    if (new URLSearchParams(location.search).has('demo')) throw 0;
+    const r = await fetch('/api/agents');
+    if (!r.ok) throw 0;
+    const list = await r.json();
+    if (!editorsWanted) return; // switched to Project mode while loading
+    live = true;
+    applySnapshot(list);
     modeEl.innerHTML = '<i class="live"></i>' + t('app.live');
-    applySnapshot(JSON.parse(e.data));
-  };
-  es.onerror = () => (modeEl.textContent = t('app.disconnected'));
-} catch {
-  startDemo();
+    editorsES = new EventSource('/api/stream');
+    editorsES.onmessage = (e) => {
+      modeEl.innerHTML = '<i class="live"></i>' + t('app.live');
+      applySnapshot(JSON.parse(e.data));
+    };
+    editorsES.onerror = () => (modeEl.textContent = t('app.disconnected'));
+  } catch {
+    if (editorsWanted) startDemo();
+  }
 }
+function disconnectEditors() {
+  editorsWanted = false;
+  editorsES?.close();
+  editorsES = null;
+}
+// Remove every character; the next snapshot places agents directly without walking from the gate.
+function resetWorld() {
+  for (const a of [...agents]) removeAgent(a);
+  feedEl.innerHTML = '';
+  firstSnapshot = true;
+}
+initProjectMode({
+  applySnapshot: (list) => {
+    live = true;
+    applySnapshot(list);
+  },
+  resetWorld,
+  connectEditors: () => connectEditors(),
+  disconnectEditors,
+  setPanel,
+  setModeText: (html) => (modeEl.innerHTML = html),
+});
+await connectEditors();
 
 // ---------- Loop ----------
 const clock = new THREE.Clock();
 const tmp = new THREE.Vector3();
 let followHome = false;
-function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+let lastDraw = 0;
+function frame(ts = 0) {
+  requestAnimationFrame(frame);
+  // Draw at most 15 (light) or 30 fps; a hidden tab draws nothing.
+  if (document.hidden || ts - lastDraw < 1000 / (lite ? 15 : 30) - 1) return;
+  lastDraw = ts;
+  const dt = Math.min(clock.getDelta(), 0.1);
   now = clock.elapsedTime;
   for (const a of agents) {
     if (now >= a.nextChange) {
@@ -563,7 +605,26 @@ function frame() {
   applyFrustum();
   renderer.render(scene, camera);
   labels.render(scene, camera);
-  requestAnimationFrame(frame);
 }
+function applyLite() {
+  renderer.setPixelRatio(lite ? 1 : Math.min(devicePixelRatio, 1.5));
+  renderer.shadowMap.enabled = !lite;
+  sun.castShadow = !lite;
+  scene.traverse((o) => o.material && (o.material.needsUpdate = true));
+  resize();
+  const b = document.getElementById('liteBtn');
+  if (b) {
+    b.classList.toggle('on', lite);
+    b.title = t(lite ? 'hud.liteOn' : 'hud.liteOff');
+  }
+}
+document.getElementById('liteBtn')?.addEventListener('click', () => {
+  lite = !lite;
+  try {
+    localStorage.setItem('agent-hq-lite', lite ? '1' : '0');
+  } catch {}
+  applyLite();
+});
+applyLite();
 controls.addEventListener('start', () => (targetZoom = null));
 frame();
