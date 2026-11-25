@@ -54,13 +54,8 @@ test('listGeminiModels default + override', async () => {
 });
 
 test('createGemini: binary not found', async () => {
-  const saved = process.env.PATH;
-  process.env.PATH = '/nonexistent';
-  const g = createGemini({ workspace: '/tmp', prompt: 'p', onSession() {}, onEvent() {} });
-  process.env.PATH = saved;
-  const r = await g.send('hai');
-  // findBin also checks fixed dirs; only assert when gemini is really absent
-  if (!r.ok) assert.equal(r.error, 'Gemini CLI (perintah `gemini`) tidak ditemukan.');
+  const g = createGemini({ workspace: '/tmp', prompt: 'p', bin: '', onSession() {}, onEvent() {} });
+  assert.deepEqual(await g.send('hai'), { ok: false, error: 'Gemini CLI (perintah `gemini`) tidak ditemukan.' });
 });
 
 function fakeBin(script) {

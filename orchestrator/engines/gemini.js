@@ -76,7 +76,7 @@ export function createStreamParser({ onSession = () => {}, onEvent = () => {} } 
 }
 
 export function createGemini({ workspace, model, prompt, sessionId, onSession, onEvent, roots, bin: binOverride }) {
-  const bin = binOverride || findBin('gemini');
+  const bin = binOverride !== undefined ? binOverride : findBin('gemini');
   let proc = null;
   let first = !sessionId;
 
