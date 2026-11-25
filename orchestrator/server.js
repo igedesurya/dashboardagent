@@ -123,7 +123,7 @@ function prepareWorkspace(p, role, opts = {}) {
   writeJson(path.join(dir, '.gemini', 'settings.json'), {
     mcpServers: { ahq: { command: node, args: [path.join(here, 'mcp.js')], env: { ...env, AHQ_ENGINE: 'gemini' } } },
     hooks: { BeforeTool: [{ matcher: '.*', hooks: [{ type: 'command', command: `${hookEnv} ${JSON.stringify(node)} ${JSON.stringify(path.join(here, 'gemini-hook.js'))}`, timeout: 86400000 }] }] },
-    context: { fileName: ['GEMINI.md', 'AGENTS.md'] },
+    context: { fileName: ['GEMINI.md'] },
   });
   // Every role may read the project folders and the project's ticket worktrees (SA reviews them).
   const roots = [dir, safeReal(dir), worktreeRoot(p.meta.id), ...p.meta.folders.flatMap((f) => [f, safeReal(f)])].filter((v, i, a) => v && a.indexOf(v) === i);
@@ -880,7 +880,7 @@ const CLAUDE_MODELS = [
 const MODEL_LISTERS = {
   claude: async () => CLAUDE_MODELS,
   cursor: listCursorModels,
-  gemini: async () => listGeminiModels(),
+  gemini: listGeminiModels,
   opencode: listOpencodeModels,
 };
 const modelCache = {};

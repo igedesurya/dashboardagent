@@ -105,7 +105,7 @@ gemini -p "<pesan>" --output-format stream-json --approval-mode yolo \
 ```
 
 - Event: `init` (session id, model), `message`, `tool_use`, `tool_result`, `error`, `result` (statistik token).
-- MCP `ahq` dan hook dipasang lewat `.gemini/settings.json` di folder kerja peran: `mcpServers.ahq` dengan `AHQ_ENGINE=gemini`, `hooks.BeforeTool` dengan `timeout` 86400000 ms, dan `context.fileName` berisi `GEMINI.md` dan `AGENTS.md`. Instruksi peran ditulis juga ke `GEMINI.md` (isi sama dengan `AGENTS.md`).
+- MCP `ahq` dan hook dipasang lewat `.gemini/settings.json` di folder kerja peran: `mcpServers.ahq` dengan `AHQ_ENGINE=gemini`, `hooks.BeforeTool` dengan `timeout` 86400000 ms, dan `context.fileName` berisi `GEMINI.md`. Instruksi peran ditulis juga ke `GEMINI.md` (isi sama dengan `AGENTS.md`).
 - Izin: hook `BeforeTool` (`gemini-hook.js`) menerima `tool_name` dan `tool_input`, memanggil `/internal/permission`, lalu `decide()`. Balasannya `{"decision":"allow"}` atau `{"decision":"deny","reason":…}`; error apa pun = exit 2 (fail closed). Peran baca saja (PM/BA/SA) dan QA dijaga oleh `decide()`.
 - Login: jalankan `gemini` sekali dan masuk dengan akun Google, atau set `GEMINI_API_KEY` (atau env Vertex AI).
 - Model: daftar statis (`auto`, `pro`, `flash`, `flash-lite` + nama konkret), bisa diganti lewat env `AHQ_GEMINI_MODELS`. Gemini CLI tidak punya perintah daftar model.
