@@ -1,6 +1,6 @@
 # Agent HQ
 
-A visual dashboard for monitoring AI agents (Claude Code, Cursor, opencode, Grok Bot) in real time on your Mac. The UI is isometric: each agent becomes a chibi character that moves depending on its state (coding, reading, thinking, waiting, idle, error).
+A visual dashboard for monitoring AI agents (Claude Code, Cursor, opencode, Gemini CLI, Grok Bot) in real time on your Mac. The UI is isometric: each agent becomes a chibi character that moves depending on its state (coding, reading, thinking, waiting, idle, error).
 
 The server only **reads** data from your local Claude/Cursor/opencode/Grok folders — it never modifies them. No npm dependencies; it just needs Node 24 (for `node:sqlite`, which reads the opencode database).
 
@@ -132,6 +132,15 @@ These are the agents Agent HQ can detect **automatically** — no configuration 
 | **opencode** | `~/.local/share/opencode/opencode.db` (SQLite) | ✅ Yes | Supports both the legacy `session` schema and the newer `session_v2` (opencode 2.x) |
 | **Grok Bot** | `~/Library/Application Support/Grok Bot/...` | ✅ macOS only | Desktop app data; not available on Linux/Windows |
 | **Any other bot / custom agent** | `POST /api/events` | Manual (push) | See "Integrating other agents" below |
+
+### Gemini as a project-team engine (orchestrator)
+
+In project mode (`orchestrator/`), each role (PM, BA, SA, Programmer, QA) can pick **Gemini** as its engine next to claude, opencode and cursor. Validated against Gemini CLI v0.71.1 (T-002).
+
+- **Install and log in** with the official Gemini CLI (`gemini` on `PATH`), run `gemini` once and sign in (or set `GEMINI_API_KEY` / Vertex AI env vars).
+- **How it is controlled:** one `gemini -p ... --output-format stream-json --approval-mode yolo` process per turn, with **`GEMINI_CLI_TRUST_WORKSPACE=true`** so project hooks load. Do **not** use `--skip-trust` (it runs without loading hooks). Resumed with `--resume <session-uuid>` (confirmed working). The `ahq` MCP tools and `BeforeTool` hook come from `.gemini/settings.json`; the adapter refuses to start if that hook is missing. Role instructions live in `GEMINI.md`. **Plan mode is not used** for read-only roles — safety is hook + `decide()` only.
+- **Models:** dynamic list from `gemini models -o json` (fallback: `auto`, `gemini-3.1-pro-preview-customtools`, `gemini-3-flash-preview`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`); override with `AHQ_GEMINI_MODELS`.
+- **Quota:** surfaced as `result.status=error` with messages like "exhausted your daily quota"; the orchestrator pauses gemini agents when detected.
 
 ### Integrating other agents (`POST /api/events`)
 

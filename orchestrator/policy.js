@@ -47,10 +47,30 @@ const READONLY_GIT = new Set(['log', 'status', 'diff', 'show', 'branch', 'blame'
 const isInside = (p, roots) => roots.some((r) => p === r || p.startsWith(r.endsWith('/') ? r : r + '/'));
 const resolveP = (p, cwd) => path.resolve(cwd, String(p).replace(/^~(?=\/|$)/, HOME));
 
+// Gemini CLI built-in tool names -> our request kinds. MCP tools are "mcp_<server>_<tool>".
+const GEMINI_READ = new Set(['read_file', 'read_many_files', 'list_directory', 'glob', 'grep_search', 'search_file_content']);
+const GEMINI_EDIT = new Set(['replace', 'write_file']);
+const GEMINI_WEB = new Set(['web_fetch', 'google_web_search']);
+const GEMINI_META = new Set(['write_todos', 'ask_user', 'activate_skill', 'enter_plan_mode', 'update_topic']);
+// invoke_agent intentionally falls through to "other" (ask the user): sub-agent tool calls have not been proven to pass through the BeforeTool hook.
+
+function normalizeGemini(t, input) {
+  const list = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]).filter((x) => typeof x === 'string' && x);
+  if (/^mcp_ahq_/i.test(t)) return { kind: 'ahq', label: t };
+  if (t === 'run_shell_command') return { kind: 'shell', command: input.command || '', label: t };
+  if (GEMINI_READ.has(t)) return { kind: 'read', paths: [...list(input.file_path), ...list(input.dir_path), ...list(input.path), ...list(input.paths), ...list(input.include)], label: t };
+  if (GEMINI_EDIT.has(t)) return { kind: 'edit', paths: list(input.file_path), label: t };
+  if (GEMINI_WEB.has(t)) return { kind: 'web', target: input.url || input.prompt || input.query || '', label: t };
+  if (GEMINI_META.has(t)) return { kind: 'meta', label: t };
+  if (t === 'exit_plan_mode') return { kind: 'plan', plan: input.plan || '', label: t };
+  return { kind: 'other', label: t, target: JSON.stringify(input).slice(0, 120) };
+}
+
 // Convert each engine's request into { kind, paths, command, label }.
 export function normalize(engine, tool, input = {}) {
   const t = String(tool || '');
   const lower = t.toLowerCase();
+  if (engine === 'gemini') return normalizeGemini(t, input || {});
   if (engine === 'opencode') {
     // opencode permission: action + resources
     const res = input.resources || [];

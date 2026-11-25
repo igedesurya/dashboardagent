@@ -13,7 +13,7 @@ Skenario yang sama untuk tiap engine:
 
 ## Ringkasan
 
-**Ketiga engine lulus.** Semuanya bisa dikendalikan dashboard tanpa terminal, memakai login pengguna sendiri, memanggil tool MCP `ahq`, mengarahkan izin keamanan ke dashboard, dan melanjutkan sesi.
+**Ketiga engine lulus.** Semuanya bisa dikendalikan dashboard tanpa terminal, memakai login pengguna sendiri, memanggil tool MCP `ahq`, mengarahkan izin keamanan ke dashboard, dan melanjutkan sesi. (Gemini ditambahkan lewat T-001 dan divalidasi terhadap CLI asli di T-002 — lihat bagian Gemini.)
 
 | | opencode 2.0.30 | Claude Code 2.1.331 | Cursor (cursor-agent 2026.10.22) |
 |---|---|---|---|
@@ -93,6 +93,38 @@ Temuan:
 - Model dan token tidak dilaporkan per giliran. `model` di `system:init` hanya `"Auto"`.
 - Uji pertama setelah login sempat menggantung lebih dari 10 menit dan tidak bisa diulang. Konfigurasi yang sama kemudian selesai dalam 16 detik. Orchestrator harus memberi batas waktu per giliran dan mengulang giliran yang macet.
 
+## Gemini (Gemini CLI): T-001 + validasi nyata T-002 (v0.71.1)
+
+Engine ke-4, ditambahkan lewat tiket T-001 dan **divalidasi terhadap Gemini CLI asli** (`/opt/homebrew/bin/gemini` v0.71.1) di T-002.
+
+Cara kendali (satu proses per giliran, pola Cursor):
+
+```
+GEMINI_CLI_TRUST_WORKSPACE=true gemini -p "<pesan>" --output-format stream-json --approval-mode yolo \
+  [-m <model>] [--resume <session-uuid>] [--include-directories <folder>]
+```
+
+Hasil uji nyata:
+
+- Event stream-json cocok dengan parser: `init{session_id,model}`, `message{role,content,delta}`, `tool_use{tool_name,tool_id,parameters}`, `tool_result{…,error.type}`, `result{status,stats,error.message}`.
+- **Trust env wajib:** tanpa trust Gemini menolak jalan ("not running in a trusted directory"). Env `GEMINI_CLI_TRUST_WORKSPACE=true` membuat Gemini jalan **dan** memuat hook `BeforeTool`. **`--skip-trust` berbahaya**: Gemini jalan tetapi hook proyek **tidak dimuat**. Adapter menolak jalan bila `.gemini/settings.json` workspace tidak punya `hooks.BeforeTool`.
+- **`--approval-mode plan` tidak dipakai** untuk peran baca-saja: tool MCP `ahq` tidak tersedia di plan, dan `exit_plan_mode` disetujui otomatis di headless sehingga agent lalu bisa mengedit. Penjaga baca-saja = hook + `decide()` saja.
+- MCP `ahq` dari `.gemini/settings.json` OK dengan yolo; nama tool `mcp_ahq_<tool>`; Gemini menambah argumen `wait_for_previous`.
+- **Resume `--resume <session-uuid>` berhasil** (ingat isi giliran sebelumnya), walau `--help` hanya menyebut "latest"/indeks.
+- Tool bawaan: `update_topic` → kind meta (tanpa kartu izin); `invoke_agent` tetap ditanyakan (sub-agent belum terbukti lewat hook).
+- Model: dinamis dari `gemini models -o json` (`auto`, `gemini-3.1-pro-preview-customtools`, `gemini-3-flash-preview`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`, …). Alias lama `pro`/`flash`/`flash-lite` dan `gemini-2.5-*` dihapus dari fallback; override `AHQ_GEMINI_MODELS` tetap.
+- Kuota: `result.status=error` dengan pesan seperti "You have exhausted your daily quota on this model." / "exceeded your current quota"; regex QUOTA cocok.
+
+Kekurangan dan risiko:
+
+1. **Hook fail-open di Gemini**: error hook selain exit 0/2 hanya jadi peringatan dan tool tetap jalan. Hook kita harus fail closed (exit 2 bila orchestrator tak terjangkau).
+2. **Hook yang menunggu jawaban pengguna** butuh timeout besar (bawaan 60 detik). Kita set 86400000 ms.
+3. **`--approval-mode yolo` + trust env**: hook jadi penjaga utama. Tanpa trust / dengan `--skip-trust`, hook tidak dimuat. Mitigasi: wajibkan trust env + cek `hooks.BeforeTool` sebelum spawn.
+4. **Satu proses per giliran**: start lebih lambat dari Claude, sama seperti Cursor.
+5. Format stream-json bisa berubah di versi CLI berikutnya; adapter mengabaikan event tak dikenal.
+6. Kuota harian akun bisa habis per model; deteksi kuota menjeda agent gemini.
+7. Nama tool Gemini berbeda (`run_shell_command`, `replace`, `dir_path`, `mcp_ahq_<tool>`), jadi `normalize()` di `policy.js` punya cabang khusus.
+
 ## Login yang sudah dilakukan
 
 | Engine | Status |
@@ -100,6 +132,7 @@ Temuan:
 | opencode | Siap (provider yang sudah diatur pengguna) |
 | Claude Code | Dipasang lewat pemasang resmi (`~/.local/bin/claude`, 2.1.331) dan login claude.ai |
 | Cursor | `cursor-agent login` berhasil |
+| Gemini | Siap: Gemini CLI v0.71.1 terpasang dan divalidasi (T-002); login akun Google pengguna |
 
 ## Dampak ke plan
 
@@ -108,6 +141,7 @@ Temuan:
   - opencode: aturan `permissions` per sesi dengan aksi `shell`, `read`, `edit`.
   - Claude: daftar `ask` di file `--settings` per peran, plus `--permission-prompt-tool`.
   - Cursor: `--force` plus hook `preToolUse` yang menunggu jawaban dashboard.
+  - Gemini: `GEMINI_CLI_TRUST_WORKSPACE=true` + `--approval-mode yolo` plus hook `BeforeTool` yang fail closed (plan mode tidak dipakai).
 - Persetujuan rencana SA di Claude memakai mode `plan` dan `ExitPlanMode`.
 - Event `provider.quota` dari opencode menjadi pemicu jeda "semua istirahat". Sinyal kuota Claude dan Cursor belum diketahui.
 - Orchestrator memberi batas waktu per giliran untuk semua engine dan mengulang yang macet.

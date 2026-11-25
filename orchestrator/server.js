@@ -10,6 +10,7 @@ import { isRepo, ensureWorktree, ensureDetached, removeWorktree, commitAll, diff
 import { ROLES, HANDOFF, TOOLS, instructions } from './roles.js';
 import { createClaude } from './engines/claude.js';
 import { createCursor, listCursorModels } from './engines/cursor.js';
+import { createGemini, listGeminiModels } from './engines/gemini.js';
 import { createOpencode, onOpencodePermission, replyPermission, stopOpencode, listOpencodeModels } from './engines/opencode.js';
 
 const TOKEN = loadToken({ create: true });
@@ -18,15 +19,15 @@ const PROJECTS_DIR = ensureDir(path.join(DATA, 'projects'));
 const QUOTA_PAUSE = 15 * 60 * 1000;
 // A working agent with no activity for this long is considered stuck and stopped.
 const STALL_MS = 20 * 60 * 1000;
-const ENGINES = ['claude', 'opencode', 'cursor'];
-const DEFAULT_MODEL = { claude: 'sonnet', opencode: 'opencode/deepseek-v4.1-flash-free', cursor: '' };
+const ENGINES = ['claude', 'opencode', 'cursor', 'gemini'];
+const DEFAULT_MODEL = { claude: 'sonnet', opencode: 'opencode/deepseek-v4.1-flash-free', cursor: '', gemini: 'auto' };
 
 // ---------------- state ----------------
 const projects = new Map(); // id -> { meta, state, sessions }
 const workers = new Map(); // `${pid}:${role}` -> Worker
 const pending = new Map(); // permission id -> request
 const clients = new Map(); // pid -> Set(res)
-const pausedUntil = { claude: 0, opencode: 0, cursor: 0 };
+const pausedUntil = { claude: 0, opencode: 0, cursor: 0, gemini: 0 };
 let active = 0;
 let seqPerm = 0;
 
@@ -105,6 +106,7 @@ function prepareWorkspace(p, role, opts = {}) {
   }
   const prompt = instructions(role, p.meta, opts);
   fs.writeFileSync(path.join(dir, 'AGENTS.md'), prompt + '\n');
+  fs.writeFileSync(path.join(dir, 'GEMINI.md'), prompt + '\n');
   writeJson(path.join(dir, '.ahq', 'claude-settings.json'), {
     permissions: { ask: ['Read(**/.env*)', 'Read(**/*.pem)', 'Read(**/*.key)', 'Read(**/id_rsa*)', 'Read(**/.npmrc)', 'Read(**/credentials*)', 'Bash(curl:*)', 'Bash(wget:*)', 'WebFetch', 'WebSearch'] },
   });
@@ -116,6 +118,12 @@ function prepareWorkspace(p, role, opts = {}) {
   writeJson(path.join(dir, 'opencode.json'), {
     $schema: 'https://opencode.ai/config.json',
     mcp: { ahq: { type: 'local', command: [node, path.join(here, 'mcp.js')], environment: { ...env, AHQ_ENGINE: 'opencode' } } },
+  });
+  // Gemini CLI: MCP + BeforeTool hook (the only guard, since the adapter runs with --approval-mode yolo). Hook timeout is in ms.
+  writeJson(path.join(dir, '.gemini', 'settings.json'), {
+    mcpServers: { ahq: { command: node, args: [path.join(here, 'mcp.js')], env: { ...env, AHQ_ENGINE: 'gemini' } } },
+    hooks: { BeforeTool: [{ matcher: '.*', hooks: [{ type: 'command', command: `${hookEnv} ${JSON.stringify(node)} ${JSON.stringify(path.join(here, 'gemini-hook.js'))}`, timeout: 86400000 }] }] },
+    context: { fileName: ['GEMINI.md'] },
   });
   // Every role may read the project folders and the project's ticket worktrees (SA reviews them).
   const roots = [dir, safeReal(dir), worktreeRoot(p.meta.id), ...p.meta.folders.flatMap((f) => [f, safeReal(f)])].filter((v, i, a) => v && a.indexOf(v) === i);
@@ -200,6 +208,7 @@ class Worker {
     if (process.env.AHQ_DRY_RUN) this.adapter = { send: async () => ({ ok: true, text: '' }), stop() {} };
     else if (engine === 'claude') this.adapter = createClaude(common);
     else if (engine === 'cursor') this.adapter = createCursor(common);
+    else if (engine === 'gemini') this.adapter = createGemini(common);
     else this.adapter = createOpencode({ ...common, agent: ROLES[this.role].readOnly ? 'plan' : 'build' });
   }
   onEvent(e) {
@@ -861,18 +870,24 @@ function slug(name) {
   return id;
 }
 function engines() {
-  return Object.fromEntries([['claude', findBin('claude')], ['opencode', findBin('opencode')], ['cursor', findBin('cursor-agent')]].map(([k, v]) => [k, { available: !!v, defaultModel: DEFAULT_MODEL[k] }]));
+  return Object.fromEntries([['claude', findBin('claude')], ['opencode', findBin('opencode')], ['cursor', findBin('cursor-agent')], ['gemini', findBin('gemini')]].map(([k, v]) => [k, { available: !!v, defaultModel: DEFAULT_MODEL[k] }]));
 }
 const CLAUDE_MODELS = [
   { value: 'sonnet', provider: 'claude', label: 'sonnet — Claude Sonnet terbaru' },
   { value: 'opus', provider: 'claude', label: 'opus — Claude Opus terbaru' },
   { value: 'haiku', provider: 'claude', label: 'haiku — Claude Haiku terbaru (hemat)' },
 ];
+const MODEL_LISTERS = {
+  claude: async () => CLAUDE_MODELS,
+  cursor: listCursorModels,
+  gemini: listGeminiModels,
+  opencode: listOpencodeModels,
+};
 const modelCache = {};
 async function modelsFor(engine, refresh) {
   const c = modelCache[engine];
   if (c && !refresh && Date.now() - c.t < 10 * 60 * 1000) return c.models;
-  const models = engine === 'claude' ? CLAUDE_MODELS : engine === 'cursor' ? await listCursorModels() : await listOpencodeModels();
+  const models = await MODEL_LISTERS[engine]();
   modelCache[engine] = { t: Date.now(), models };
   return models;
 }
@@ -917,7 +932,7 @@ const server = http.createServer(async (req, res) => {
   const host = req.headers.host || '';
   if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) return send(res, 403, { error: 'host ditolak' });
 
-  // Internal routes: MCP server and Cursor hook, authenticated with the shared token.
+  // Internal routes: MCP server and Cursor/Gemini hooks, authenticated with the shared token.
   if (url.pathname.startsWith('/internal/')) {
     const b = await body(req);
     if (!b || b.token !== TOKEN || !projects.has(b.project)) return send(res, 403, { error: 'ditolak' });

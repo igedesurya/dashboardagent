@@ -9,6 +9,7 @@ const hhmm = (ts) => new Date(ts).toTimeString().slice(0, 5);
 const ROLE_LABEL = { pm: 'PM', ba: 'BA', sa: 'SA', dev: 'Programmer', qa: 'QA', user: '', system: '' };
 const ROLE_ORDER = ['pm', 'ba', 'sa', 'dev', 'qa'];
 const ROLE_COLOR = { pm: '#d97757', ba: '#1fa774', sa: '#4f8cff', dev: '#9b6bff', qa: '#f2a20c' };
+const ENGINE_ORDER = ['claude', 'opencode', 'cursor', 'gemini'];
 const WAITING_YOU = 'menunggu jawabanmu';
 const WORK_ST = new Set(['dikerjakan', 'review_kode', 'perbaikan', 'run_aplikasi', 'testing']);
 const isWorking = (a) => a && !['idle', 'error'].includes(a.state) && a.task !== WAITING_YOU;
@@ -359,7 +360,7 @@ export function initProjectMode(hooks) {
   }
   const roleCfg = (role) => draft.roles[role] || draft.roles.pm || { engine: 'claude', model: '' };
   function renderModal() {
-    const engOpts = (cur) => ['claude', 'opencode', 'cursor'].map((k) => `<option value="${k}" ${cur === k ? 'selected' : ''} ${state.engines[k]?.available ? '' : 'disabled'}>${k}${state.engines[k]?.available ? '' : ' — ' + t('proj.notInstalled')}</option>`).join('');
+    const engOpts = (cur) => ENGINE_ORDER.map((k) => `<option value="${k}" ${cur === k ? 'selected' : ''} ${state.engines[k]?.available ? '' : 'disabled'}>${k}${state.engines[k]?.available ? '' : ' — ' + t('proj.notInstalled')}</option>`).join('');
     const rows = ROLE_ORDER.map((role) => {
       const r = state.roles?.[role] || {};
       const cfg = roleCfg(role);

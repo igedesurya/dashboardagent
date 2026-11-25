@@ -1,7 +1,7 @@
 {
   "name": "agent-hq",
   "version": "1.0.0",
-  "description": "Visual dashboard for AI agents (Claude Code, Cursor, opencode, Grok Bot).",
+  "description": "Visual dashboard for AI agents (Claude Code, Cursor, opencode, Gemini CLI, Grok Bot).",
   "private": true,
   "type": "module",
   "bin": {
