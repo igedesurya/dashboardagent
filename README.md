@@ -1,6 +1,6 @@
 # Agent HQ
 
-A visual dashboard for monitoring AI agents (Claude Code, Cursor, opencode, Grok Bot) in real time on your Mac. The UI is isometric: each agent becomes a chibi character that moves depending on its state (coding, reading, thinking, waiting, idle, error).
+A visual dashboard for monitoring AI agents (Claude Code, Cursor, opencode, Gemini CLI, Grok Bot) in real time on your Mac. The UI is isometric: each agent becomes a chibi character that moves depending on its state (coding, reading, thinking, waiting, idle, error).
 
 The server only **reads** data from your local Claude/Cursor/opencode/Grok folders — it never modifies them. No npm dependencies; it just needs Node 24 (for `node:sqlite`, which reads the opencode database).
 
@@ -132,6 +132,15 @@ These are the agents Agent HQ can detect **automatically** — no configuration 
 | **opencode** | `~/.local/share/opencode/opencode.db` (SQLite) | ✅ Yes | Supports both the legacy `session` schema and the newer `session_v2` (opencode 2.x) |
 | **Grok Bot** | `~/Library/Application Support/Grok Bot/...` | ✅ macOS only | Desktop app data; not available on Linux/Windows |
 | **Any other bot / custom agent** | `POST /api/events` | Manual (push) | See "Integrating other agents" below |
+
+### Gemini as a project-team engine (orchestrator)
+
+In project mode (`orchestrator/`), each role (PM, BA, SA, Programmer, QA) can pick **Gemini** as its engine next to claude, opencode and cursor.
+
+- **Install and log in** with the official Gemini CLI: install it so the `gemini` command is on your `PATH`, run `gemini` once and sign in (or set `GEMINI_API_KEY` / Vertex AI env vars). Until `gemini` is found, the engine is shown as disabled ("not installed") in project settings.
+- **How it is controlled:** one `gemini -p ... --output-format stream-json --approval-mode yolo` process per turn (like Cursor), resumed with `--resume <session id>`. The `ahq` MCP tools come from `.gemini/settings.json`, role instructions from `GEMINI.md`, and every tool call goes through a `BeforeTool` hook (`gemini-hook.js`) to the dashboard permission check.
+- **Models:** static list (`auto`, `pro`, `flash`, `flash-lite` and a few concrete names); override with `AHQ_GEMINI_MODELS`.
+- **Known limitations:** not yet tested end-to-end with a real Gemini CLI on this Mac; flags and event names come from the docs and may change (the docs say Gemini CLI is being replaced by Antigravity CLI); the hook is the only permission guard (Gemini itself fails open on hook errors, so the hook fails closed); one process per turn starts slower than Claude; token usage may be empty.
 
 ### Integrating other agents (`POST /api/events`)
 
