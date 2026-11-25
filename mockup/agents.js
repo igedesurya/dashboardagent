@@ -48,6 +48,7 @@ export const SOURCES = {
   claude: { label: 'Claude', short: 'C' },
   cursor: { label: 'Cursor', short: 'Cu' },
   opencode: { label: 'opencode', short: 'oc' },
+  gemini: { label: 'Gemini', short: 'Ge' },
   grok: { label: 'Grok bot', short: 'G' },
 };
 
