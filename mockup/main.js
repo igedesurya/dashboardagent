@@ -46,13 +46,13 @@ function resize() {
   const h = stage.clientHeight;
   const aspect = w / h;
   // pulau butuh ~50 unit lebar di area yang tidak tertutup panel
-  const wide = w > 760;
-  const usable = wide && panelOpen ? w - 344 : w;
+  const cover = panelCover();
+  const usable = Math.max(160, w - cover.x);
   const need = w > 760 ? 60 : 38; // di HP sisi pulau boleh terpotong, bisa digeser
   const viewH = Math.max(24, (need * w) / usable / aspect);
   const viewW = viewH * aspect;
   // geser frustum supaya pulau tidak tertutup panel (kanan di desktop, bawah di HP)
-  frustum = { viewW, viewH, sx: wide && panelOpen ? (172 / w) * viewW : 0, sy: !wide && panelOpen ? 0.18 * viewH : 0 };
+  frustum = { viewW, viewH, sx: cover.x ? (cover.x / 2 / w) * viewW : 0, sy: cover.y ? (cover.y / 2 / h) * viewH : 0 };
   applyFrustum();
   renderer.setSize(w, h);
   labels.setSize(w, h);
@@ -66,6 +66,16 @@ function applyFrustum() {
   camera.top = viewH / 2 - sy / z;
   camera.bottom = -viewH / 2 - sy / z;
   camera.updateProjectionMatrix();
+}
+// Pixel span of the open side panel, so a wider chat card still leaves the island visible.
+function panelCover() {
+  if (!panelOpen) return { x: 0, y: 0 };
+  const el = document.getElementById(document.body.classList.contains('project-mode') ? 'chatPanel' : 'panel');
+  if (!el) return { x: 0, y: 0 };
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return { x: 0, y: 0 };
+  if (stage.clientWidth > 760) return { x: Math.max(0, stage.clientWidth - r.left), y: 0 };
+  return { x: 0, y: Math.max(0, stage.clientHeight - r.top) };
 }
 addEventListener('resize', resize);
 resize();
@@ -558,6 +568,7 @@ initProjectMode({
   connectEditors: () => connectEditors(),
   disconnectEditors,
   setPanel,
+  resize,
   setModeText: (html) => (modeEl.innerHTML = html),
 });
 await connectEditors();
@@ -566,6 +577,80 @@ await connectEditors();
 const clock = new THREE.Clock();
 const tmp = new THREE.Vector3();
 let followHome = false;
+// Walking characters step aside instead of passing through each other.
+// Seated or working characters keep their reserved spot; only walkers move.
+const PERSONAL = 0.9;
+function separate(dt) {
+  for (const a of agents) {
+    if (!a.walking) continue;
+    const p = a.c.root.position;
+    const head = a.c.root.rotation.y;
+    for (const b of agents) {
+      if (b === a) continue;
+      const q = b.c.root.position;
+      let dx = p.x - q.x;
+      let dz = p.z - q.z;
+      const d = Math.hypot(dx, dz);
+      if (d >= PERSONAL) continue;
+      if (d < 1e-3) {
+        dx = Math.cos(head);
+        dz = -Math.sin(head);
+      } else {
+        dx /= d;
+        dz /= d;
+      }
+      // Push apart, plus a small step to the walker's right so two walkers pass instead of stalling.
+      const push = (PERSONAL - Math.max(d, 1e-3)) * Math.min(1, dt * 8);
+      p.x += dx * push + Math.cos(head) * push * 0.5;
+      p.z += dz * push - Math.sin(head) * push * 0.5;
+    }
+  }
+}
+
+// Labels that would cover each other on screen are stacked upward with a thin leader line.
+const labelPos = new THREE.Vector3();
+function declutterLabels() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  const items = [];
+  for (const a of agents) {
+    if (a.el.style.display === 'none') continue;
+    a.label.getWorldPosition(labelPos).project(camera);
+    if (labelPos.z > 1) continue;
+    items.push({ a, x: ((labelPos.x + 1) / 2) * w, y: ((1 - labelPos.y) / 2) * h, wd: a.inner.offsetWidth, ht: a.inner.offsetHeight });
+  }
+  // Nearest to the camera (lowest on screen) keeps its place; the rest take the closest free slot,
+  // trying a little above first, then to the sides.
+  items.sort((p, q) => q.y - p.y);
+  const placed = [];
+  const GAP = 4;
+  const hits = (x, top, bottom, wd) => placed.some((o) => Math.abs(o.x - x) < (o.wd + wd) / 2 + GAP && top < o.bottom + GAP && bottom > o.top - GAP);
+  for (const it of items) {
+    const step = it.ht + GAP;
+    const side = it.wd / 2 + GAP;
+    let best = { dx: 0, dy: 0 };
+    let found = false;
+    const cands = [];
+    for (let lv = 0; lv <= 6; lv++) for (const sx of [0, -1, 1, -2, 2]) cands.push({ dx: sx * side, dy: lv * step, cost: lv * step + Math.abs(sx) * side * 0.9 });
+    // Keeping the current slot is cheaper, so labels do not flip back and forth as characters move.
+    const prev = it.a.offTarget;
+    for (const c of cands) if (Math.abs(c.dx - prev.x) < 1 && Math.abs(c.dy - prev.y) < 1) c.cost -= step * 0.6;
+    cands.sort((p, q) => p.cost - q.cost);
+    for (const c of cands) {
+      const bottom = it.y - c.dy;
+      if (!hits(it.x + c.dx, bottom - it.ht, bottom, it.wd)) {
+        best = c;
+        found = true;
+        break;
+      }
+    }
+    if (!found) best = { dx: 0, dy: 0 };
+    const bottom = it.y - best.dy;
+    placed.push({ x: it.x + best.dx, wd: it.wd, top: bottom - it.ht, bottom });
+    it.a.setLabelOffset(best.dx, best.dy);
+  }
+}
+
 let lastDraw = 0;
 function frame(ts = 0) {
   requestAnimationFrame(frame);
@@ -587,6 +672,7 @@ function frame(ts = 0) {
     a.update(now, dt);
     if (was && !a.walking && a === selected) renderCard();
   }
+  separate(dt);
   world.tick(now, dt);
 
   if (selected || followHome) {
@@ -605,6 +691,7 @@ function frame(ts = 0) {
   applyFrustum();
   renderer.render(scene, camera);
   labels.render(scene, camera);
+  declutterLabels();
 }
 function applyLite() {
   renderer.setPixelRatio(lite ? 1 : Math.min(devicePixelRatio, 1.5));

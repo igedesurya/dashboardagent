@@ -225,6 +225,10 @@ export class Agent {
       this.onClick?.(this);
     });
     this.el = el;
+    this.inner = el.firstElementChild;
+    // Screen-space lift that keeps this label off its neighbours (set by main.js).
+    this.off = { x: 0, y: 0 };
+    this.offTarget = { x: 0, y: 0 };
     this.label = new CSS2DObject(el);
     this.label.position.set(0, 2.25, 0);
     this.c.root.add(this.label);
@@ -280,6 +284,32 @@ export class Agent {
     this.el.classList.toggle('alert', state === 'waiting' || state === 'error');
   }
 
+  // Screen-space offset that keeps this label clear of its neighbours (chosen by main.js).
+  setLabelOffset(dx, dy) {
+    this.offTarget.x = dx;
+    this.offTarget.y = dy;
+  }
+  _applyOffset(dt) {
+    const o = this.off;
+    const g = this.offTarget;
+    if (Math.abs(g.x - o.x) < 0.3 && Math.abs(g.y - o.y) < 0.3) {
+      if (o.x === g.x && o.y === g.y) return;
+      o.x = g.x;
+      o.y = g.y;
+    } else {
+      const k = Math.min(1, dt * 10);
+      o.x += (g.x - o.x) * k;
+      o.y += (g.y - o.y) * k;
+    }
+    const st = this.el.style;
+    st.setProperty('--dx', `${o.x.toFixed(1)}px`);
+    st.setProperty('--dy', `${o.y.toFixed(1)}px`);
+    // Leader line from the label back to the character.
+    st.setProperty('--ll', `${Math.hypot(o.x, o.y).toFixed(1)}px`);
+    st.setProperty('--la', `${Math.atan2(o.x, o.y).toFixed(3)}rad`);
+    this.el.classList.toggle('lifted', Math.hypot(o.x, o.y) > 6);
+  }
+
   setSelected(v) { this.el.classList.toggle('selected', v); }
   setHover(v) { this.el.classList.toggle('hover', v); }
   get walking() { return this.path.length > 0; }
@@ -303,6 +333,7 @@ export class Agent {
     for (const e of eyes) e.scale.y = blink;
     if (antennaBall) antennaBall.position.y = 0.92 + Math.sin(tt * 4) * 0.03;
     this.el.classList.toggle('fresh', performance.now() < this.freshUntil);
+    this._applyOffset(dt);
 
     if (this.path.length) {
       const tgt = this.path[0];

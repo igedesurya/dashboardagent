@@ -29,7 +29,12 @@
   .brand h1 { margin: 0; white-space: nowrap; font-size: 20px; font-weight: 700; letter-spacing: .2px; }
   .brand small { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
   .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #ff8a5b, #f2c14e); display: grid; place-items: center; font-size: 18px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.15); }
-  #stats { padding: 8px 10px; display: flex; gap: 6px; flex-wrap: wrap; position: static; }
+  #stats { padding: 8px 10px; display: flex; gap: 6px; flex-wrap: nowrap; position: static; min-width: 0; overflow: hidden; }
+  /* Top bar pieces keep their size; only the stats strip gives way (and hides) when space runs out. */
+  .topbar > .hud { flex: none; }
+  .topbar > #stats { flex: 0 1 auto; }
+  .topbar button, .chip { white-space: nowrap; }
+  body.project-mode #stats { display: none; }
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; background: #fff; border: 2px solid color-mix(in srgb, var(--c) 35%, #fff); font-size: 13px; }
   .chip b { color: var(--c); }
   .clockbox { margin-left: auto; padding: 6px 8px 6px 14px; display: flex; align-items: center; gap: 10px; position: static; }
@@ -101,7 +106,9 @@
 
   /* Label karakter di scene */
   .char-label { pointer-events: none; }
-  .char-label .inner { transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .char-label .inner { position: relative; transform: translate(var(--dx, 0px), calc(-50% - var(--dy, 0px))); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .char-label .inner::after { content: ''; position: absolute; left: 50%; top: 100%; width: 2px; height: var(--ll, 0px); margin-left: -1px; transform-origin: top center; transform: rotate(var(--la, 0rad)); background: linear-gradient(var(--c), transparent); opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .char-label.lifted .inner::after { opacity: .7; }
   .tag { pointer-events: auto; cursor: pointer; display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 6px; border-radius: 999px; background: rgba(255,255,255,.95); font-size: 12px; font-weight: 600; box-shadow: 0 2px 0 rgba(0,0,0,.12); border: 2px solid var(--c); white-space: nowrap; }
   .tag .dot { width: 8px; height: 8px; border-radius: 50%; background: #999; }
   .tag .src { font-size: 9px; padding: 0 4px; border-radius: 6px; background: #eef2ff; color: #3949ab; }
@@ -128,9 +135,16 @@
   button.primary { background: var(--ink); color: #fff; border-color: var(--ink); box-shadow: inset 0 -3px 0 rgba(0,0,0,.35); }
   body.project-mode .winbox, body.project-mode #panel { display: none; }
 
-  /* Panel chat PM */
-  #chatPanel { display: none; top: 78px; right: 12px; bottom: 12px; width: 320px; flex-direction: column; padding: 12px; gap: 8px; }
+  /* Panel chat PM. Width and height come from the size controls. */
+  #chatPanel { display: none; top: 78px; right: 12px; bottom: 12px; width: var(--cp-w, 320px); flex-direction: column; padding: 12px; gap: 8px; }
   body.project-mode.panel-open #chatPanel { display: flex; }
+  .cp-size { position: absolute; top: 10px; right: 10px; display: flex; gap: 2px; z-index: 1; }
+  .cp-size button { width: 26px; height: 26px; padding: 0; border-radius: 8px; line-height: 1; font-size: 13px; color: var(--muted); background: transparent; border: 0; box-shadow: none; }
+  .cp-size button:hover { background: #f3ece0; color: var(--ink); }
+  #chatPanel .cp-head { padding-right: 84px; min-height: 26px; }
+  .cp-resize { position: absolute; z-index: 2; left: 0; top: 18px; bottom: 18px; width: 10px; margin-left: -5px; cursor: ew-resize; touch-action: none; }
+  .cp-resize::after { content: ''; position: absolute; left: 3px; top: 50%; width: 3px; height: 36px; margin-top: -18px; border-radius: 3px; background: #d9cbb8; }
+  body.cp-drag, body.cp-drag * { cursor: ew-resize !important; user-select: none; }
   .cp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .cp-title { flex: 1; min-width: 0; }
   .cp-title b { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -138,6 +152,9 @@
   .cp-pause { width: 100%; font-size: 12px; background: #fff3d6; border-radius: 10px; padding: 4px 8px; }
   .cp-tabs { display: flex; gap: 4px; }
   .cp-tabs button { flex: 1; font-size: 13px; padding: 4px; }
+  .sop textarea { width: 100%; font: inherit; border: 2px solid var(--line); border-radius: 10px; padding: 8px; background: #fff; color: inherit; resize: vertical; }
+  .sop-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+  .sop-list button.on { background: var(--ink); color: #fff; }
   .cp-tabs button.on { background: var(--ink); color: #fff; border-color: var(--ink); box-shadow: none; }
   .cp-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; font-size: 13px; }
   .cp-empty { margin: auto; text-align: center; color: var(--muted); padding: 10px; }
@@ -250,13 +267,23 @@
   .tk-work .resume { margin-top: 6px; font-size: 12px; padding: 3px 9px; }
 
   @media (max-width: 760px) {
-    #chatPanel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 55vh; border-radius: 18px 18px 0 0; }
+    #chatPanel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: var(--cp-h, 55vh); border-radius: 18px 18px 0 0; }
+    .cp-resize { left: 28px; right: 28px; top: 0; bottom: auto; width: auto; height: 10px; margin: -5px 0 0; cursor: ns-resize; }
+    .cp-resize::after { left: 50%; top: 3px; width: 36px; height: 3px; margin: 0 0 0 -18px; }
+    body.cp-drag, body.cp-drag * { cursor: ns-resize !important; }
     .modebox .seg span { display: none; }
     #panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 36vh; border-radius: 18px 18px 0 0; }
     #feed { display: none; }
     #card { left: 16px; right: 16px; width: auto; top: 70px; }
     .brand small, #stats { display: none; }
-    .topbar { left: 16px; right: 16px; }
+    .topbar { left: 16px; right: 16px; flex-wrap: wrap; gap: 8px; }
+    .topbar > .brand { flex: 1 1 auto; min-width: 0; }
+    .topbar > .clockbox { flex: 1 1 100%; margin-left: 0; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; gap: 6px; }
+    .clockbox::-webkit-scrollbar { display: none; }
+    .clockbox > * { flex: none; }
+    #clock { font-size: 17px; }
+    .tag { font-size: 11px; padding: 1px 7px 1px 5px; }
+    .bubble { font-size: 11px; padding: 2px 6px; }
     .legend { display: none; }
   }
 </style>
@@ -306,8 +333,14 @@
   </aside>
 
   <aside class="hud" id="chatPanel">
+    <div class="cp-resize" id="cpResize" role="separator" aria-orientation="vertical" data-i18n-title="proj.cardDrag" data-i18n-aria="proj.cardDrag" title="Seret untuk mengubah ukuran" aria-label="Seret untuk mengubah ukuran"></div>
+    <div class="cp-size">
+      <button type="button" id="cpSmaller" data-i18n-title="proj.cardSmaller" data-i18n-aria="proj.cardSmaller" title="Kecilkan" aria-label="Kecilkan">−</button>
+      <button type="button" id="cpBigger" data-i18n-title="proj.cardBigger" data-i18n-aria="proj.cardBigger" title="Besarkan" aria-label="Besarkan">+</button>
+      <button type="button" id="cpHide" data-i18n-title="proj.cardHide" data-i18n-aria="proj.cardHide" title="Sembunyikan" aria-label="Sembunyikan">✕</button>
+    </div>
     <div class="cp-head"></div>
-    <div class="cp-tabs"><button data-tab="chat" class="on" data-i18n="proj.tabChat">Chat PM</button><button data-tab="tickets" data-i18n="proj.tabTickets">Tiket</button></div>
+    <div class="cp-tabs"><button data-tab="chat" class="on" data-i18n="proj.tabChat">Chat PM</button><button data-tab="sop" data-i18n="proj.tabSop">SOP</button><button data-tab="tickets" data-i18n="proj.tabTickets">Tiket</button></div>
     <div class="cp-body"></div>
     <div class="cp-foot"><textarea id="cpInput" rows="2" data-i18n-aria="proj.inputPh"></textarea>
       <div class="cp-actions"><button id="cpStop" hidden data-i18n="proj.stop">Hentikan</button><button id="cpSend" class="primary" data-i18n="proj.send">Kirim ke PM</button></div></div>

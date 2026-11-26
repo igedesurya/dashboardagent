@@ -34,6 +34,38 @@ let active = 0;
 let seqPerm = 0;
 
 const pdir = (id) => path.join(PROJECTS_DIR, id);
+const loopSlug = (name) => String(name || '').toLowerCase().normalize('NFKD').replace(/\.md$/i, '').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+const toolFileName = (name) => {
+  const base = path.basename(String(name || ''));
+  return /^[\w.-]{1,60}$/.test(base) && !base.startsWith('.') ? base : null;
+};
+const loopDir = (pid, kind) => path.join(pdir(pid), 'loop', kind === 'toolbox' ? 'toolbox' : 'playbooks');
+function loopNames(pid, kind) {
+  try {
+    return fs.readdirSync(loopDir(pid, kind)).filter((f) => kind === 'toolbox' ? toolFileName(f) : f.endsWith('.md')).map((f) => (kind === 'toolbox' ? f : f.slice(0, -3))).sort();
+  } catch {
+    return [];
+  }
+}
+function loopList(pid) {
+  return { playbooks: loopNames(pid, 'playbook'), toolbox: loopNames(pid, 'toolbox') };
+}
+function loopIndex(pid) {
+  const l = loopList(pid);
+  return `[Playbook: ${l.playbooks.join(', ') || 'belum ada'}] [Toolbox: ${l.toolbox.join(', ') || 'kosong'}]`;
+}
+function readLoopFile(pid, kind, name) {
+  const file = path.join(loopDir(pid, kind), kind === 'toolbox' ? name : `${name}.md`);
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+function writeLoopFile(pid, kind, name, text) {
+  const dir = ensureDir(loopDir(pid, kind));
+  fs.writeFileSync(path.join(dir, kind === 'toolbox' ? name : `${name}.md`), text);
+}
 function loadProjects() {
   for (const id of fs.readdirSync(PROJECTS_DIR)) {
     const meta = readJson(path.join(pdir(id), 'project.json'), null);
@@ -43,6 +75,8 @@ function loadProjects() {
     for (const m of state.chat || []) if (m.kind === 'permission' && !m.decision) m.decision = 'expired';
     // Old "always" entries were plain strings shared by every role (e.g. any rm -rf, all of /Users/<you>). Drop them.
     if ((state.remembered || []).some((r) => typeof r === 'string')) state.remembered = state.remembered.filter((r) => typeof r === 'object');
+    if (!meta.worker) meta.worker = meta.roles?.dev || meta.roles?.pm || { engine: 'cursor', model: '' };
+    if (!meta.qa) meta.qa = meta.roles?.qa || { engine: 'gemini', model: '' };
     projects.set(id, {
       meta,
       state: { chat: [], tickets: [], seq: { t: 0, q: 0, m: 0 }, remembered: [], ...state },
@@ -131,7 +165,12 @@ function prepareWorkspace(p, role, opts = {}) {
   });
   // Every role may read the project folders and the project's ticket worktrees (SA reviews them).
   const roots = [dir, safeReal(dir), worktreeRoot(p.meta.id), ...p.meta.folders.flatMap((f) => [f, safeReal(f)])].filter((v, i, a) => v && a.indexOf(v) === i);
-  return { dir, prompt, roots, writeRoots: opts.dir ? [dir, safeReal(dir)].filter(Boolean) : [] };
+  const writeRoots = opts.writeRoots?.length
+    ? opts.writeRoots.flatMap((d) => [d, safeReal(d)]).filter(Boolean)
+    : opts.dir
+      ? [dir, safeReal(dir)].filter(Boolean)
+      : [];
+  return { dir, prompt, roots, writeRoots };
 }
 const hashText = (s) => {
   let h = 0;
@@ -173,6 +212,7 @@ class Worker {
     return this.inst ? `${this.role}:${this.opts.ticket}:${this.inst}` : this.role;
   }
   get label() {
+    if (this.role === 'worker') return 'Pengerjaan';
     if (this.role === 'qa') return this.inst ? `QA ${this.inst}` : 'QA';
     if (this.role !== 'dev') return ROLES[this.role].label;
     return this.inst === 'run' ? 'Programmer' : `Programmer ${this.inst}`;
@@ -181,7 +221,10 @@ class Worker {
     return projects.get(this.pid);
   }
   get cfg() {
-    return this.p.meta.roles[this.role] || this.p.meta.roles.pm || { engine: 'claude', model: '' };
+    const m = this.p.meta;
+    if (this.role === 'qa') return m.qa || { engine: 'gemini', model: '' };
+    if (this.role === 'worker') return m.worker || { engine: 'cursor', model: '' };
+    return m.roles?.[this.role] || m.worker || m.roles?.pm || { engine: 'claude', model: '' };
   }
   get engine() {
     return this.cfg.engine;
@@ -218,13 +261,23 @@ class Worker {
     else if (engine === 'claude') this.adapter = createClaude(common);
     else if (engine === 'cursor') this.adapter = createCursor(common);
     else if (engine === 'gemini') this.adapter = createGemini(common);
-    else this.adapter = createOpencode({ ...common, agent: ROLES[this.role].readOnly ? 'plan' : 'build' });
+    else this.adapter = createOpencode({ ...common, agent: ROLES[this.role]?.readOnly ? 'plan' : 'build' });
   }
   onEvent(e) {
     if (e.type === 'usage') this.tokens = e.tokens;
-    if (e.type === 'tool') this.activity = activityFor(e.name, e.input);
+    if (e.type === 'tool') {
+      const next = activityFor(e.name, e.input);
+      const cur = this.activity;
+      // Same tool and file as the previous event: nothing new for the dashboard.
+      if (cur && cur.state === next.state && cur.task === next.task && cur.tool === next.tool) {
+        this.updated = Date.now();
+        return;
+      }
+      this.activity = next;
+    }
     this.updated = Date.now();
-    emit(this.pid);
+    // Activity can fire many times a second. Chat and tickets stay on the fast path.
+    emit(this.pid, true);
   }
   enqueue(text) {
     if (!this.inbox.length) this.queuedAt = Date.now();
@@ -257,11 +310,13 @@ function workerFor(pid, role, inst = '', opts) {
 
 function kick() {
   const ready = [...workers.values()].filter((w) => w.inbox.length && !w.busy && Date.now() >= pausedUntil[w.engine]).sort((a, b) => a.queuedAt - b.queuedAt);
+  const pids = new Set();
   for (const w of ready) {
-    if (active >= MAX_ACTIVE) break;
+    pids.add(w.pid);
+    if (active >= MAX_ACTIVE) continue;
     runTurn(w);
   }
-  for (const pid of projects.keys()) emit(pid);
+  for (const pid of pids) emit(pid);
 }
 setInterval(kick, 30000);
 setInterval(() => {
@@ -356,6 +411,11 @@ function nudgeIfStuck(w) {
     return;
   }
   if (w.role === 'qa') {
+    if (w.pendingReport) {
+      w.pendingReport = false;
+      w.enqueue('[Sistem] Giliranmu berakhir tapi hasil uji belum kamu laporkan. Panggil lapor_uji.');
+      return;
+    }
     const t = ticketOf(p, w.opts.ticket);
     const step = `${t?.history.length}`;
     t && (t.nudged ||= {});
@@ -570,7 +630,56 @@ function teamTool(pid, role, tool, a = {}, inst = '') {
         workerFor(pid, 'sa').enqueue(`[Dari Programmer] Run aplikasi ${t.id} GAGAL:\n${a.ringkasan}\n\nWorktree branch tiket: ${intDir(pid, t.id)}\nPutuskan langkahnya dengan minta_perbaikan (programmer 0 = semua, atau nomor tertentu).`);
         return { text: 'Hasil run tercatat dan dikirim ke SA.' };
       }
+      case 'baca_playbook': {
+        const nama = loopSlug(a.nama);
+        if (!nama) return { text: loopIndex(pid) };
+        const text = readLoopFile(pid, 'playbook', nama);
+        return text == null ? { error: `Playbook ${nama} tidak ada. Daftar: ${loopIndex(pid)}` } : { text };
+      }
+      case 'simpan_playbook': {
+        const nama = loopSlug(a.nama);
+        if (!nama) return { error: 'Nama playbook wajib, huruf dan angka.' };
+        const langkah = String(a.langkah || '').trim();
+        const proof = String(a.proof || '').trim();
+        if (!langkah || !proof) return { error: 'Langkah dan Proof wajib diisi.' };
+        const body = `# ${nama}\n\n## Langkah\n${langkah.slice(0, 20000)}\n\n## Proof\n${proof.slice(0, 8000)}\n`;
+        writeLoopFile(pid, 'playbook', nama, body);
+        addChat(pid, { from: 'system', kind: 'info', text: `Playbook ${nama} diperbarui.` });
+        return { text: `Playbook ${nama} tersimpan. Besok ikuti file ini, bukan koreksi di chat.` };
+      }
+      case 'baca_alat': {
+        const nama = toolFileName(a.nama);
+        if (!nama) return { text: loopIndex(pid) };
+        const text = readLoopFile(pid, 'toolbox', nama);
+        return text == null ? { error: `File ${nama} tidak ada di Toolbox.` } : { text };
+      }
+      case 'simpan_alat': {
+        const nama = toolFileName(a.nama);
+        if (!nama) return { error: 'Nama file Toolbox tidak valid.' };
+        const isi = String(a.isi || '');
+        if (!isi.trim()) return { error: 'Isi file kosong.' };
+        writeLoopFile(pid, 'toolbox', nama, isi.slice(0, 80000));
+        addChat(pid, { from: 'system', kind: 'info', text: `Toolbox menyimpan ${nama}.` });
+        return { text: `${nama} tersimpan di Toolbox. Lain kali pakai file ini, jangan buat dari nol.` };
+      }
+      case 'minta_qa': {
+        if (role !== 'worker') return { error: 'Hanya sesi pengerjaan yang boleh memanggil QA.' };
+        const summary = String(a.ringkasan || '').trim();
+        if (!summary) return { error: 'Isi ringkasan perubahan yang harus diuji.' };
+        if (!p.meta.folders.length) return { error: 'Folder project masih kosong.' };
+        startIndependentQa(pid, summary, String(a.cara_uji || ''));
+        return { text: 'QA dimulai di sesi terpisah. Akhiri giliranmu; hasilnya datang sebagai pesan.' };
+      }
       case 'lapor_uji': {
+        if (role === 'qa' && !a.tiket) {
+          const q = workers.get(`${pid}:qa`);
+          if (q) q.pendingReport = false;
+          const pass = !!a.lulus;
+          addChat(pid, { from: 'qa', who: 'QA', kind: 'qa', pass, text: pass ? String(a.hasil || '') : `${a.temuan || ''}\n\n${a.hasil || ''}`.trim() });
+          const seat = workerSeat(p);
+          workerFor(pid, 'worker', '', seat).enqueue(`[Dari QA] ${pass ? 'LULUS' : 'GAGAL'}\nHasil: ${a.hasil || ''}\nTemuan: ${a.temuan || '-'}\n\nKalau gagal, perbaiki di folder yang sama lalu uji lagi sendiri. Kalau lulus, lapor ke pengguna.`);
+          return { text: 'Hasil uji tercatat dan dikirim ke sesi pengerjaan.' };
+        }
         const t = need(a.tiket);
         const q = t.work?.qa?.[inst];
         if (!q || t.status !== 'testing') return { error: `Kamu bukan QA yang sedang menguji ${t.id}.` };
@@ -625,7 +734,9 @@ function teamTool(pid, role, tool, a = {}, inst = '') {
         return { text: `Tiket ${t.id} dilepas. Distribusikan dengan serahkan (BA untuk bisnis, SA untuk teknis).` };
       }
       case 'lapor': {
-        addChat(pid, { from: role, kind: 'report', ticket: a.tiket ? String(a.tiket).toUpperCase() : null, text: String(a.isi || '') });
+        const bukti = String(a.bukti || '').trim();
+        const isi = bukti ? `${a.isi || ''}\n\nProof:\n${bukti}` : String(a.isi || '');
+        addChat(pid, { from: role, kind: 'report', ticket: a.tiket ? String(a.tiket).toUpperCase() : null, text: isi });
         return { text: 'Laporan terkirim ke pengguna.' };
       }
       case 'selesaikan_tiket': {
@@ -755,6 +866,36 @@ function startReview(pid, t) {
 }
 
 // Original repo folder -> this Programmer's worktree copy (for the policy and for task messages).
+function workerSeat(p) {
+  const dirs = [path.join(DATA, 'workspaces', p.meta.id, 'worker'), ...p.meta.folders];
+  return { writeRoots: dirs.flatMap((f) => [f, safeReal(f)].filter(Boolean)) };
+}
+
+// Work happens in the folders the user already has open, on whatever branch is checked out there.
+function ensureProjectWork(p) {
+  const lines = [];
+  for (const src of p.meta.folders) {
+    if (!isRepo(src)) {
+      lines.push(`- ${path.basename(src)}: kerjakan langsung di ${src}.`);
+      continue;
+    }
+    const ref = currentRef(src);
+    lines.push(`- ${path.basename(src)}: kerjakan langsung di ${src}, branch yang sedang terbuka (${ref.branch}). Jangan membuat branch baru dan jangan pindah branch.`);
+  }
+  return { lines };
+}
+
+// QA is a second session in the same folders. It only runs when the working session asks, and it cannot edit.
+function startIndependentQa(pid, summary, how) {
+  const p = projects.get(pid);
+  const info = ensureProjectWork(p);
+  const qa = workerFor(pid, 'qa', '', { mode: 'qa' });
+  qa.pendingReport = true;
+  const steps = how.trim() || p.meta.brief?.uji || '(pakai cara uji di ringkasan project)';
+  addChat(pid, { from: 'system', kind: 'work', text: `QA mulai menguji: ${clip(summary, 180)}` });
+  qa.enqueue(`[Sistem] Uji perubahan berikut di folder project yang sedang terbuka. Jangan mengubah kode dan jangan pindah branch. Selesai dengan lapor_uji (tanpa tiket).\n\nYang diubah:\n${summary}\n\nCara uji:\n${steps}\n\nLokasi:\n${info.lines.join('\n')}`);
+}
+
 function mirrorsFor(p, w) {
   if ((w.role !== 'dev' && w.role !== 'qa') || !w.opts.dir) return [];
   const t = ticketOf(p, w.opts.ticket);
@@ -965,13 +1106,9 @@ function agentRecord(w) {
 }
 function snapshot(pid) {
   const p = projects.get(pid);
-  const team = Object.entries(ROLES).filter(([, r]) => r.active && !r.multi).map(([role]) => workerFor(pid, role));
-  for (const t of p.state.tickets) {
-    if (!t.work || !WORK_STATUS.has(t.status)) continue;
-    if (t.status !== 'testing') for (const n of Object.keys(t.work.devs)) team.push(devWorker(pid, t, n));
-    if (t.status === 'run_aplikasi') team.push(devWorker(pid, t, 'run'));
-    if (t.status === 'testing') for (const n of Object.keys(t.work.qa || {})) team.push(qaWorker(pid, t, n));
-  }
+  const team = [workerFor(pid, 'worker', '', workerSeat(p))];
+  const qa = workers.get(`${pid}:qa`);
+  if (qa) team.push(qa);
   return {
     project: p.meta,
     agents: team.map(agentRecord),
@@ -979,19 +1116,33 @@ function snapshot(pid) {
     tickets: p.state.tickets,
     pending: [...pending.values()].filter((r) => r.pid === pid).map(({ resolve, ...r }) => r),
     remembered: p.state.remembered,
+    loop: loopList(pid),
     paused: Object.fromEntries(ENGINES.filter((e) => Date.now() < pausedUntil[e]).map((e) => [e, pausedUntil[e]])),
     active,
     maxActive: MAX_ACTIVE,
   };
 }
 const emitTimers = {};
-function emit(pid) {
+const lastSent = new Map();
+// slow: activity-only updates. A pending chat/ticket emit is not delayed behind them.
+function emit(pid, slow = false) {
   if (!clients.get(pid)?.size) return;
-  clearTimeout(emitTimers[pid]);
-  emitTimers[pid] = setTimeout(() => {
-    const data = `data: ${JSON.stringify(snapshot(pid))}\n\n`;
+  const pendingEmit = emitTimers[pid];
+  if (slow && pendingEmit && !pendingEmit.slow) return;
+  clearTimeout(pendingEmit?.t);
+  const timer = setTimeout(() => {
+    delete emitTimers[pid];
+    let data;
+    try {
+      data = `data: ${JSON.stringify(snapshot(pid))}\n\n`;
+    } catch {
+      return;
+    }
+    if (lastSent.get(pid) === data) return;
+    lastSent.set(pid, data);
     for (const res of clients.get(pid) || []) res.write(data);
-  }, 50);
+  }, slow ? 400 : 50);
+  emitTimers[pid] = { t: timer, slow };
 }
 
 // ---------------- HTTP ----------------
@@ -1130,7 +1281,8 @@ const server = http.createServer(async (req, res) => {
       const id = slug(b.name);
       const eng = engines();
       const engine = ENGINES.find((e) => eng[e].available) || 'claude';
-      const meta = { id, name: clip(b.name, 60), folders: cleanFolders(b.folders), brief: cleanBrief(b.brief || {}), roles: { pm: { engine, model: '' } }, created: Date.now() };
+      const qaEngine = eng.gemini?.available ? 'gemini' : engine;
+      const meta = { id, name: clip(b.name, 60), folders: cleanFolders(b.folders), brief: cleanBrief(b.brief || {}), worker: { engine, model: '' }, qa: { engine: qaEngine, model: '' }, created: Date.now() };
       projects.set(id, { meta, state: { chat: [], tickets: [], seq: { t: 0, q: 0, m: 0 }, remembered: [] }, sessions: {} });
       save(id);
       return ok(meta);
@@ -1145,13 +1297,35 @@ const server = http.createServer(async (req, res) => {
       if (b.name) p.meta.name = clip(b.name, 60);
       if (b.folders) p.meta.folders = cleanFolders(b.folders);
       if (b.brief) p.meta.brief = cleanBrief(b.brief);
-      if (b.roles) for (const [role, cfg] of Object.entries(b.roles)) {
-        if (!ROLES[role] || !ENGINES.includes(cfg.engine)) continue;
-        p.meta.roles[role] = { engine: cfg.engine, model: clip(cfg.model || '', 80) };
-      }
+      const seat = (cfg, prev) => (cfg && ENGINES.includes(cfg.engine) ? { engine: cfg.engine, model: clip(cfg.model || '', 80) } : prev);
+      if (b.worker) p.meta.worker = seat(b.worker, p.meta.worker);
+      if (b.qa) p.meta.qa = seat(b.qa, p.meta.qa);
       save(pid);
       emit(pid);
       return ok(p.meta);
+    }
+    if (action === 'loop' && req.method === 'GET') {
+      const kind = url.searchParams.get('kind') === 'toolbox' ? 'toolbox' : 'playbook';
+      const name = kind === 'toolbox' ? toolFileName(url.searchParams.get('name')) : loopSlug(url.searchParams.get('name'));
+      if (!name) return ok(loopList(pid));
+      const text = readLoopFile(pid, kind, name);
+      return text == null ? bad(404, 'tidak ada') : ok({ name, text });
+    }
+    if (action === 'loop' && req.method === 'PUT') {
+      const b = await body(req);
+      if (!b) return bad(400, 'JSON tidak valid');
+      const kind = b.kind === 'toolbox' ? 'toolbox' : 'playbook';
+      const name = kind === 'toolbox' ? toolFileName(b.name) : loopSlug(b.name);
+      if (!name) return bad(400, 'nama tidak valid');
+      if (b.hapus) {
+        try { fs.unlinkSync(path.join(loopDir(pid, kind), kind === 'toolbox' ? name : `${name}.md`)); } catch { return bad(404, 'tidak ada'); }
+      } else {
+        const text = String(b.text ?? '');
+        if (!text.trim()) return bad(400, 'isi kosong');
+        writeLoopFile(pid, kind, name, text.slice(0, 80000));
+      }
+      emit(pid);
+      return ok({ ok: true, ...loopList(pid) });
     }
     if (action === 'stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', ...(origin ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {}) });
@@ -1172,7 +1346,14 @@ const server = http.createServer(async (req, res) => {
       if (!p.meta.folders.length) return bad(400, 'Tambahkan minimal satu folder project dulu.');
       if (!hasBrief(p.meta)) return bad(400, 'Isi ringkasan project dulu (jenis dan tujuan) di ⚙️ Pengaturan project. Tanpa itu agent tidak punya konteks.');
       addChat(pid, { from: 'user', kind: 'message', text });
-      workerFor(pid, 'pm').enqueue(text);
+      let info;
+      try {
+        info = ensureProjectWork(p);
+      } catch (e) {
+        return bad(400, clip(e.stderr || e.message, 300));
+      }
+      const where = info.lines.length ? `\n\n[Lokasi kerja — branch yang sedang terbuka]\n${info.lines.join('\n')}` : '';
+      workerFor(pid, 'worker', '', workerSeat(p)).enqueue(`${text}${where}\n\n${loopIndex(pid)}\nSebelum bekerja, baca playbook yang cocok. Sebelum lapor, centang Proof. Kalau salah, perbaiki playbook-nya.`);
       return ok({ ok: true });
     }
     if (action === 'answer' && req.method === 'POST') {

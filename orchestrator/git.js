@@ -23,6 +23,12 @@ export function isRepo(dir) {
 
 const branchExists = (repo, b) => tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${b}`).ok;
 
+// Current commit of a local branch, or null when the branch does not exist yet.
+export function branchTip(repo, branch) {
+  const r = tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
+  return r.ok ? r.out : null;
+}
+
 // Create (or reuse) a worktree at `dir` on `branch`, starting from `from` when the branch is new.
 export function ensureWorktree(repo, dir, branch, from) {
   if (fs.existsSync(path.join(dir, '.git'))) return;

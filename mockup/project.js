@@ -6,9 +6,8 @@ const LS_KEY = 'agent-hq-mode';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const hhmm = (ts) => new Date(ts).toTimeString().slice(0, 5);
-const ROLE_LABEL = { pm: 'PM', ba: 'BA', sa: 'SA', dev: 'Programmer', qa: 'QA', user: '', system: '' };
-const ROLE_ORDER = ['pm', 'ba', 'sa', 'dev', 'qa'];
-const ROLE_COLOR = { pm: '#d97757', ba: '#1fa774', sa: '#4f8cff', dev: '#9b6bff', qa: '#f2a20c' };
+const ROLE_LABEL = { worker: 'Kerja', pm: 'PM', ba: 'BA', sa: 'SA', dev: 'Programmer', qa: 'QA', user: '', system: '' };
+const ROLE_COLOR = { worker: '#9b6bff', pm: '#d97757', ba: '#1fa774', sa: '#4f8cff', dev: '#9b6bff', qa: '#f2a20c' };
 const ENGINE_ORDER = ['claude', 'opencode', 'cursor', 'gemini'];
 const WAITING_YOU = 'menunggu jawabanmu';
 const WORK_ST = new Set(['dikerjakan', 'review_kode', 'perbaikan', 'run_aplikasi', 'testing']);
@@ -38,6 +37,10 @@ export function initProjectMode(hooks) {
   let es = null;
   let tab = 'chat';
   let online = false;
+  let structKey = '';
+  let liveKey = '';
+  let agentKey = '';
+  let paintRev = 0;
 
   const chat = $('#chatPanel');
   const modal = $('#projModal');
@@ -60,6 +63,7 @@ export function initProjectMode(hooks) {
     if (m === mode) return;
     mode = m;
     persist();
+    syncPanelBtn();
     document.body.classList.toggle('project-mode', m === 'project');
     for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === m);
     hooks.resetWorld();
@@ -117,7 +121,11 @@ export function initProjectMode(hooks) {
     es.onmessage = (e) => {
       online = true;
       snap = JSON.parse(e.data);
-      hooks.applySnapshot(snap.agents);
+      const nextAgents = snap.agents.map((a) => `${a.id}\0${a.state}\0${a.task || ''}\0${a.tool || ''}`).join('\n');
+      if (nextAgents !== agentKey) {
+        agentKey = nextAgents;
+        hooks.applySnapshot(snap.agents);
+      }
       hooks.setModeText(`<i class="live"></i>${esc(snap.project.name)}`);
       render();
     };
@@ -129,6 +137,77 @@ export function initProjectMode(hooks) {
   }
 
   // ---------- chat panel ----------
+  const panelBtn = $('#panelBtn');
+  function syncPanelBtn() {
+    panelBtn.dataset.i18nTitle = mode === 'project' ? 'proj.cardToggle' : 'hud.tooltip.agents';
+    panelBtn.title = t(panelBtn.dataset.i18nTitle);
+  }
+
+  const CP_KEY = 'agent-hq-cp';
+  let cpW = 320;
+  let cpH = 55;
+  const wideScreen = () => window.innerWidth > 760;
+  const maxW = () => Math.max(320, window.innerWidth - 36);
+  function clamp(n, min, max) {
+    return Math.min(max, Math.max(min, n));
+  }
+  function applyCardSize() {
+    const w = clamp(cpW, 280, maxW());
+    const h = clamp(cpH, 28, 88);
+    document.documentElement.style.setProperty('--cp-w', Math.round(w) + 'px');
+    document.documentElement.style.setProperty('--cp-h', Math.round(h) + 'vh');
+    $('#cpSmaller').disabled = wideScreen() ? w <= 280 : h <= 28;
+    $('#cpBigger').disabled = wideScreen() ? w >= maxW() - 8 : h >= 88;
+    $('#cpResize').setAttribute('aria-orientation', wideScreen() ? 'vertical' : 'horizontal');
+    hooks.resize();
+  }
+  function saveCardSize() {
+    try {
+      localStorage.setItem(CP_KEY, JSON.stringify({ w: Math.round(cpW), h: Math.round(cpH) }));
+    } catch {}
+  }
+  try {
+    const savedCard = JSON.parse(localStorage.getItem(CP_KEY) || '{}');
+    if (savedCard.w) cpW = savedCard.w;
+    if (savedCard.h) cpH = savedCard.h;
+  } catch {}
+  applyCardSize();
+
+  function stepCard(dir) {
+    if (wideScreen()) cpW = clamp(cpW + dir * 160, 280, maxW());
+    else cpH = clamp(cpH + dir * 12, 28, 88);
+    applyCardSize();
+    saveCardSize();
+  }
+  $('#cpSmaller').addEventListener('click', () => stepCard(-1));
+  $('#cpBigger').addEventListener('click', () => stepCard(1));
+  $('#cpHide').addEventListener('click', () => hooks.setPanel(false));
+  $('#cpResize').addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const wide = wideScreen();
+    const start = wide ? e.clientX : e.clientY;
+    const base = wide ? cpW : cpH;
+    const vh = window.innerHeight / 100;
+    document.body.classList.add('cp-drag');
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+    const move = (ev) => {
+      if (wide) cpW = clamp(base + (start - ev.clientX), 280, maxW());
+      else cpH = clamp(base + (start - ev.clientY) / vh, 28, 88);
+      applyCardSize();
+    };
+    const up = () => {
+      document.body.classList.remove('cp-drag');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      saveCardSize();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  });
+  addEventListener('resize', () => applyCardSize());
+
   for (const b of chat.querySelectorAll('[data-tab]')) b.addEventListener('click', () => {
     tab = b.dataset.tab;
     render();
@@ -154,8 +233,25 @@ export function initProjectMode(hooks) {
       return;
     }
     const working = snap.agents.filter(isWorking);
+    const sk = structureKey();
+    const lk = activityKey(working);
+    if (sk === structKey && lk === liveKey) return;
+    if (sk === structKey && tab === 'sop') {
+      structKey = sk;
+      liveKey = lk;
+      paintTeam(working);
+      return;
+    }
+    const activityOnly = sk === structKey && tab === 'chat' && body.querySelector('.msg, .cp-empty');
+    structKey = sk;
+    liveKey = lk;
+    if (activityOnly) {
+      paintTeam(working);
+      paintTyping(body, working);
+      return;
+    }
     const paused = Object.entries(snap.paused || {});
-    const team = snap.agents.map((a) => `<span class="team-chip ${isWorking(a) ? 'on' : ''}" title="${esc(a.source)} · ${esc(a.model)}" style="--c:${ROLE_COLOR[roleOf(a)] || '#888'}">${esc(a.name)}</span>`).join('');
+    const team = teamHtml(working);
     head.innerHTML = `<div class="cp-title"><b>${esc(snap.project.name)}</b><small>${snap.project.folders.length} ${esc(t('proj.folders'))} · ${esc(t('proj.active', { n: snap.active, max: snap.maxActive }))}</small></div><div class="team">${team}</div>`;
     if (paused.length) head.innerHTML += `<div class="cp-pause">☕ ${esc(t('proj.paused', { e: paused.map(([e, ts]) => `${e} ${hhmm(ts)}`).join(', ') }))}</div>`;
     foot.hidden = tab !== 'chat';
@@ -167,6 +263,10 @@ export function initProjectMode(hooks) {
       return;
     }
     $('#cpStop', chat).hidden = !working.length;
+    if (tab === 'sop') {
+      renderSop(body);
+      return;
+    }
     if (tab === 'tickets') {
       const open = new Set([...body.querySelectorAll('details[open]')].map((d) => d.dataset.tk));
       body.innerHTML = snap.tickets.length ? [...snap.tickets].reverse().map((tk) => renderTicket(tk, open.has(tk.id))).join('') : `<div class="cp-empty"><p>${esc(t('proj.noTickets'))}</p></div>`;
@@ -191,6 +291,85 @@ export function initProjectMode(hooks) {
     }
     if (atBottom || !body.dataset.init) body.scrollTop = body.scrollHeight;
     body.dataset.init = 1;
+  }
+
+  // Chat, tickets, and permissions. Activity text is intentionally not part of this.
+  let sopName = '';
+  async function renderSop(body) {
+    const loop = snap.loop || { playbooks: [], toolbox: [] };
+    const editing = document.activeElement?.id === 'sopText';
+    const draft = editing ? document.activeElement.value : null;
+    body.innerHTML = `<div class="sop"><p class="hint">${esc(t('proj.sopHint'))}</p>
+      <b>${esc(t('proj.sopPlay'))}</b>
+      <div class="sop-list">${loop.playbooks.map((n) => `<button data-sop="${esc(n)}" class="${n === sopName ? 'on' : ''}">${esc(n)}</button>`).join('') || `<span class="muted">${esc(t('proj.sopEmpty'))}</span>`}
+      <button id="sopNew">${esc(t('proj.sopNew'))}</button></div>
+      <textarea id="sopText" rows="12"></textarea>
+      <div class="cp-actions"><button id="sopSave" class="primary">${esc(t('proj.sopSave'))}</button><button id="sopDelete">${esc(t('proj.sopDelete'))}</button></div>
+      <b>${esc(t('proj.sopBox'))}</b>
+      <div class="sop-list">${loop.toolbox.map((n) => `<span class="pill">${esc(n)}</span>`).join('') || `<span class="muted">—</span>`}</div></div>`;
+    const area = $('#sopText', body);
+    if (draft != null) area.value = draft;
+    else if (sopName) {
+      try {
+        const r = await api('GET', `/api/projects/${projectId}/loop?name=${encodeURIComponent(sopName)}`);
+        if ($('#sopText', body) === area) area.value = r.text || '';
+      } catch {}
+    }
+    for (const b of body.querySelectorAll('[data-sop]')) b.onclick = () => {
+      sopName = b.dataset.sop;
+      renderSop(body);
+    };
+    $('#sopNew', body).onclick = () => {
+      const nama = prompt(t('proj.sopNew'));
+      if (!nama) return;
+      sopName = nama;
+      area.value = `# ${nama}\n\n## Langkah\n1. \n\n## Proof\n- [ ] \n`;
+    };
+    $('#sopSave', body).onclick = async () => {
+      const nama = sopName || prompt(t('proj.sopNew'));
+      if (!nama) return;
+      sopName = nama;
+      try {
+        await api('PUT', `/api/projects/${projectId}/loop`, { kind: 'playbook', name: nama, text: area.value });
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+    $('#sopDelete', body).onclick = async () => {
+      if (!sopName || !confirm(t('proj.sopDelete'))) return;
+      try {
+        await api('PUT', `/api/projects/${projectId}/loop`, { kind: 'playbook', name: sopName, hapus: true });
+        sopName = '';
+        area.value = '';
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  }
+
+  function structureKey() {
+    const chatSig = snap.chat.map((m) => `${m.id}:${m.answered ? 1 : 0}:${m.decision || ''}:${m.text?.length || 0}`).join(';');
+    const ticketSig = snap.tickets.map((t) => `${t.id}:${t.status}:${t.updated}:${t.holder || ''}:${t.docs?.length || 0}:${t.plan?.status || ''}:${t.work?.round || 0}`).join(';');
+    const loop = snap.loop || { playbooks: [], toolbox: [] };
+    return [paintRev, tab, snap.project.name, snap.project.folders.length, snap.active, JSON.stringify(snap.paused || {}), snap.pending.map((p) => p.id).join(','), chatSig, ticketSig, loop.playbooks.join(','), loop.toolbox.join(',')].join('|');
+  }
+  function activityKey(working) {
+    return working.map((a) => `${a.id}:${a.task || ''}`).join('|');
+  }
+  function teamHtml() {
+    return snap.agents.map((a) => `<span class="team-chip ${isWorking(a) ? 'on' : ''}" title="${esc(a.source)} · ${esc(a.model)}" style="--c:${ROLE_COLOR[roleOf(a)] || '#888'}">${esc(a.name)}</span>`).join('');
+  }
+  function paintTeam() {
+    const el = $('.team', chat);
+    if (el) el.innerHTML = teamHtml();
+    $('#cpStop', chat).hidden = !snap.agents.some(isWorking);
+  }
+  function paintTyping(body, working) {
+    const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+    for (const n of body.querySelectorAll('.msg.typing')) n.remove();
+    const html = working.map((a) => `<div class="msg typing"><span class="who" style="color:${ROLE_COLOR[roleOf(a)]}">${esc(a.name)}</span><span>${esc(a.task || '…')}</span></div>`).join('');
+    if (html) body.insertAdjacentHTML('beforeend', html);
+    if (atBottom) body.scrollTop = body.scrollHeight;
   }
 
   function renderMsg(m, pendingIds) {
@@ -389,23 +568,24 @@ export function initProjectMode(hooks) {
     return `<select class="r-model">${html}</select>`;
   }
   function openModal(project) {
-    draft = project ? structuredClone(project) : { id: null, name: '', folders: [], roles: { pm: { engine: Object.keys(state.engines).find((k) => state.engines[k]?.available) || 'claude', model: '' } } };
+    const picked = Object.keys(state.engines).find((k) => state.engines[k]?.available) || 'cursor';
+    draft = project ? structuredClone(project) : { id: null, name: '', folders: [], brief: {} };
+    draft.worker = draft.worker || draft.roles?.dev || draft.roles?.pm || { engine: picked, model: '' };
+    draft.qa = draft.qa || draft.roles?.qa || { engine: state.engines.gemini?.available ? 'gemini' : draft.worker.engine, model: '' };
     browse = null;
     modal.hidden = false;
     renderModal();
-    for (const e of new Set(ROLE_ORDER.map((r) => roleCfg(r).engine))) loadModels(e);
+    loadModels(draft.worker.engine);
+    loadModels(draft.qa.engine);
   }
-  const roleCfg = (role) => draft.roles[role] || draft.roles.pm || { engine: 'claude', model: '' };
   function renderModal() {
     const engOpts = (cur) => ENGINE_ORDER.map((k) => `<option value="${k}" ${cur === k ? 'selected' : ''} ${state.engines[k]?.available ? '' : 'disabled'}>${k}${state.engines[k]?.available ? '' : ' — ' + t('proj.notInstalled')}</option>`).join('');
-    const rows = ROLE_ORDER.map((role) => {
-      const r = state.roles?.[role] || {};
-      const cfg = roleCfg(role);
-      const later = r.active === false ? `<small class="later">${esc(t('proj.roleLater', { n: r.stage }))}</small>` : '';
+    const rows = [['worker', t('proj.seatWorker')], ['qa', t('proj.seatQa')]].map(([seat, label]) => {
+      const cfg = draft[seat];
       const err = models[cfg.engine]?.error ? `<small class="err">${esc(t('proj.modelsError'))}</small>` : /opus/i.test(cfg.model || '') ? `<small class="err">⚠️ ${esc(t('proj.heavyModel'))}</small>` : '';
-      return `<div class="role-row" data-role="${role}"><div class="role-name" style="--c:${ROLE_COLOR[role]}">${esc(ROLE_LABEL[role])}${later}</div>
+      return `<div class="role-row" data-seat="${seat}"><div class="role-name" style="--c:${ROLE_COLOR[seat]}">${esc(label)}</div>
         <select class="r-engine">${engOpts(cfg.engine)}</select>
-        <span class="modelrow">${modelSelect(cfg.engine, cfg.model, role)}<button type="button" class="r-reload" title="${esc(t('proj.modelsReload'))}">↻</button></span>${err}</div>`;
+        <span class="modelrow">${modelSelect(cfg.engine, cfg.model)}<button type="button" class="r-reload" title="${esc(t('proj.modelsReload'))}">↻</button></span>${err}</div>`;
     }).join('');
     $('.pm-body', modal).innerHTML = `
       <label>${esc(t('proj.name'))}<input id="pmName" value="${esc(draft.name)}" placeholder="Gravis"></label>
@@ -420,7 +600,7 @@ export function initProjectMode(hooks) {
         <label>${esc(t('brief.test'))}<input id="bUji" value="${esc(draft.brief?.uji || '')}" placeholder="npm test · flutter test"></label>` : ''}
         <label>${esc(t('brief.rules'))}<textarea id="bAturan" rows="2" placeholder="${esc(t('brief.rulesPh'))}">${esc(draft.brief?.aturan || '')}</textarea></label>
       </div>
-      <div class="pm-sec"><b>${esc(t('proj.teamTitle'))}</b><small>${esc(t('proj.teamHint'))}</small>
+      <div class="pm-sec"><b>${esc(t('proj.seatTitle'))}</b><small>${esc(t('proj.seatHint'))}</small>
         <div class="role-head"><span></span><span>${esc(t('proj.engine'))}</span><span>${esc(t('proj.model'))}</span></div>
         ${rows}
       </div>
@@ -437,14 +617,14 @@ export function initProjectMode(hooks) {
     const name = $('#pmName', modal);
     name.oninput = () => (draft.name = name.value);
     for (const row of modal.querySelectorAll('.role-row')) {
-      const role = row.dataset.role;
+      const seat = row.dataset.seat;
       row.querySelector('.r-engine').onchange = (e) => {
-        draft.roles[role] = { engine: e.target.value, model: '' };
+        draft[seat] = { engine: e.target.value, model: '' };
         renderModal();
         loadModels(e.target.value);
       };
-      row.querySelector('.r-model').onchange = (e) => (draft.roles[role] = { ...roleCfg(role), model: e.target.value });
-      row.querySelector('.r-reload').onclick = () => loadModels(roleCfg(role).engine, true);
+      row.querySelector('.r-model').onchange = (e) => (draft[seat] = { ...draft[seat], model: e.target.value });
+      row.querySelector('.r-reload').onclick = () => loadModels(draft[seat].engine, true);
     }
     $('#pmAdd', modal)?.addEventListener('click', () => openBrowser(null));
     for (const b of modal.querySelectorAll('[data-rm]')) b.onclick = () => {
@@ -500,7 +680,7 @@ export function initProjectMode(hooks) {
     try {
       let p = draft.id ? null : await api('POST', '/api/projects', { name: draft.name });
       const id = draft.id || p.id;
-      p = await api('PUT', `/api/projects/${id}`, { name: draft.name, folders: draft.folders, roles: draft.roles, brief: draft.brief });
+      p = await api('PUT', `/api/projects/${id}`, { name: draft.name, folders: draft.folders, worker: draft.worker, qa: draft.qa, brief: draft.brief });
       projectId = id;
       modal.hidden = true;
       hooks.resetWorld();
@@ -511,6 +691,8 @@ export function initProjectMode(hooks) {
   });
 
   onLangChange(() => {
+    paintRev++;
+    syncPanelBtn();
     input.placeholder = t('proj.inputPh');
     renderSelect();
     render();
