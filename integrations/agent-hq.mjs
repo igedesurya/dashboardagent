@@ -8,7 +8,7 @@
 //
 // Status yang valid: coding, running, reading, waiting, thinking, idle, error, offline.
 // Gagal lapor tidak pernah mengganggu bot.
-const URL = process.env.AGENT_HQ_URL || 'http://127.0.0.1:5173/api/events';
+const URL = process.env.AGENT_HQ_URL || 'http://127.0.0.1:5190/api/events';
 const AGENT = process.env.AGENT_HQ_NAME || 'Grok';
 const MODEL = process.env.AGENT_HQ_MODEL || 'grok-4';
 

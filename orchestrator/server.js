@@ -14,7 +14,7 @@ import { createGemini, listGeminiModels } from './engines/gemini.js';
 import { createOpencode, onOpencodePermission, replyPermission, stopOpencode, listOpencodeModels } from './engines/opencode.js';
 
 const TOKEN = loadToken({ create: true });
-const ORIGINS = new Set(['http://localhost:5173', 'http://127.0.0.1:5173', ...(process.env.AHQ_ORIGINS || '').split(',').filter(Boolean)]);
+const ORIGINS = new Set(['http://localhost:5190', 'http://127.0.0.1:5190', ...(process.env.AHQ_ORIGINS || '').split(',').filter(Boolean)]);
 const PROJECTS_DIR = ensureDir(path.join(DATA, 'projects'));
 const QUOTA_PAUSE = 15 * 60 * 1000;
 // A working agent with no activity for this long is considered stuck and stopped.
@@ -550,7 +550,7 @@ function startIndependentQa(pid, summary, how) {
   const info = ensureProjectWork(p);
   const qa = workerFor(pid, 'qa', { mode: 'qa' });
   qa.pendingReport = true;
-  const steps = how.trim() || p.meta.brief?.uji || '(pakai cara uji di ringkasan project)';
+  const steps = how.trim() || p.meta.brief?.uji || 'Cara uji tidak diisi. Cari sendiri di README, package.json, Makefile, atau skrip yang sudah ada.';
   addChat(pid, { from: 'system', kind: 'work', text: `QA mulai menguji: ${clip(summary, 180)}` });
   qa.enqueue(`[Sistem] Uji perubahan berikut di folder project yang sedang terbuka. Jangan mengubah kode dan jangan pindah branch. Selesai dengan lapor_uji.\n\nYang diubah:\n${summary}\n\nCara uji:\n${steps}\n\nLokasi:\n${info.lines.join('\n')}`);
 }

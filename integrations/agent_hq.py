@@ -18,7 +18,7 @@ import os
 import threading
 import urllib.request
 
-URL = os.environ.get("AGENT_HQ_URL", "http://127.0.0.1:5173/api/events")
+URL = os.environ.get("AGENT_HQ_URL", "http://127.0.0.1:5190/api/events")
 AGENT = os.environ.get("AGENT_HQ_NAME", "Grok")  # nama karakter di dashboard
 DEFAULTS = {"source": "grok", "model": os.environ.get("AGENT_HQ_MODEL", "grok-4")}
 

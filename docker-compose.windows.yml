@@ -9,7 +9,7 @@ services:
     container_name: agent-hq
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:5190:5190"
     environment:
       HOST_USER: ${USERNAME}
       WINDOW_MIN: ${WINDOW_MIN:-1440}

@@ -441,6 +441,7 @@ export function initProjectMode(hooks) {
   // ---------- project settings ----------
   let draft = null;
   let browse = null;
+  let briefMore = false;
   // Model lists come from the engines themselves (opencode: every configured provider, including 9router).
   const models = {}; // engine -> { list, loading, error }
   async function loadModels(engine, refresh = false) {
@@ -475,6 +476,9 @@ export function initProjectMode(hooks) {
   function openModal(project) {
     const picked = Object.keys(state.engines).find((k) => state.engines[k]?.available) || 'cursor';
     draft = project ? structuredClone(project) : { id: null, name: '', folders: [], brief: {} };
+    draft.brief = { jenis: 'software', ...(draft.brief || {}) };
+    if (!draft.brief.jenis) draft.brief.jenis = 'software';
+    briefMore = false;
     draft.worker = draft.worker || draft.roles?.dev || draft.roles?.pm || { engine: picked, model: '' };
     draft.qa = draft.qa || draft.roles?.qa || { engine: state.engines.gemini?.available ? 'gemini' : draft.worker.engine, model: '' };
     browse = null;
@@ -499,11 +503,14 @@ export function initProjectMode(hooks) {
         ${browse ? renderBrowser() : `<button id="pmAdd">＋ ${esc(t('proj.addFolder'))}</button>`}
       </div>
       <div class="pm-sec brief"><b>${esc(t('brief.title'))}</b><small>${esc(t('brief.hint'))}</small>
-        <label>${esc(t('brief.kind'))} *<select id="bJenis"><option value="">—</option>${['software', 'tulisan', 'lainnya'].map((k) => `<option value="${k}" ${draft.brief?.jenis === k ? 'selected' : ''}>${esc(t('brief.kind.' + k))}</option>`).join('')}</select></label>
-        <label>${esc(t('brief.goal'))} *<textarea id="bTujuan" rows="3" placeholder="${esc(t('brief.goalPh'))}">${esc(draft.brief?.tujuan || '')}</textarea></label>
-        ${draft.brief?.jenis === 'software' || !draft.brief?.jenis ? `<label>${esc(t('brief.run'))}<input id="bJalankan" value="${esc(draft.brief?.jalankan || '')}" placeholder="npm run dev · flutter run"></label>
-        <label>${esc(t('brief.test'))}<input id="bUji" value="${esc(draft.brief?.uji || '')}" placeholder="npm test · flutter test"></label>` : ''}
-        <label>${esc(t('brief.rules'))}<textarea id="bAturan" rows="2" placeholder="${esc(t('brief.rulesPh'))}">${esc(draft.brief?.aturan || '')}</textarea></label>
+        <label>${esc(t('brief.goal'))} *<textarea id="bTujuan" rows="2" placeholder="${esc(t('brief.goalPh'))}">${esc(draft.brief?.tujuan || '')}</textarea></label>
+        <details class="brief-more" ${briefMore || draft.brief?.jalankan || draft.brief?.uji || draft.brief?.aturan || (draft.brief?.jenis && draft.brief.jenis !== 'software') ? 'open' : ''}>
+          <summary>${esc(t('brief.more'))}</summary>
+          <label>${esc(t('brief.kind'))}<select id="bJenis">${['software', 'tulisan', 'lainnya'].map((k) => `<option value="${k}" ${draft.brief?.jenis === k ? 'selected' : ''}>${esc(t('brief.kind.' + k))}</option>`).join('')}</select></label>
+          ${draft.brief?.jenis === 'software' ? `<label>${esc(t('brief.run'))}<input id="bJalankan" value="${esc(draft.brief?.jalankan || '')}" placeholder="npm run dev"></label>
+          <label>${esc(t('brief.test'))}<input id="bUji" value="${esc(draft.brief?.uji || '')}" placeholder="npm test"></label>` : ''}
+          <label>${esc(t('brief.rules'))}<textarea id="bAturan" rows="2" placeholder="${esc(t('brief.rulesPh'))}">${esc(draft.brief?.aturan || '')}</textarea></label>
+        </details>
       </div>
       <div class="pm-sec"><b>${esc(t('proj.seatTitle'))}</b><small>${esc(t('proj.seatHint'))}</small>
         <div class="role-head"><span></span><span>${esc(t('proj.engine'))}</span><span>${esc(t('proj.model'))}</span></div>
@@ -515,9 +522,14 @@ export function initProjectMode(hooks) {
       if (!el) continue;
       el.oninput = el.onchange = () => {
         draft.brief = { ...(draft.brief || {}), [field]: el.value };
-        if (field === 'jenis') renderModal();
+        if (field === 'jenis') {
+          briefMore = true;
+          renderModal();
+        }
       };
     }
+    const more = $('.brief-more', modal);
+    if (more) more.ontoggle = () => (briefMore = more.open);
     for (const b of modal.querySelectorAll('[data-forget]')) b.onclick = () => forget(JSON.parse(b.dataset.forget));
     const name = $('#pmName', modal);
     name.oninput = () => (draft.name = name.value);

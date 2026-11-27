@@ -9,7 +9,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mockup');
-const PORT = +process.env.PORT || 5173;
+const PORT = +process.env.PORT || 5190;
 const HOST = process.env.HOST || '127.0.0.1';
 const HOME = os.homedir();
 const WINDOW_ENV = +process.env.WINDOW_MIN || 24 * 60; // nilai awal dari env

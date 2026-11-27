@@ -10,7 +10,7 @@ The server only **reads** data from your local Claude/Cursor/opencode/Grok folde
 npx github:igedesurya/dashboardagent
 ```
 
-Then open http://127.0.0.1:5173. Requires Node 24+. No clone, no install, no Docker.
+Then open http://127.0.0.1:5190. Requires Node 24+. No clone, no install, no Docker.
 
 To pick a different time range: `WINDOW_MIN=10080 npx github:igedesurya/dashboardagent` (7 days).
 
@@ -28,7 +28,7 @@ cd dashboardagent
 docker compose up -d --build
 ```
 
-Open http://127.0.0.1:5173
+Open http://127.0.0.1:5190
 
 Stop:
 
@@ -43,7 +43,7 @@ git pull
 docker compose up -d --build
 ```
 
-> Data is mounted read-only (`:ro`) from the original folders on your machine, so the container never modifies your Claude/Cursor/opencode/Grok data. The container only listens on `127.0.0.1:5173`, so it is not reachable from other machines.
+> Data is mounted read-only (`:ro`) from the original folders on your machine, so the container never modifies your Claude/Cursor/opencode/Grok data. The container only listens on `127.0.0.1:5190`, so it is not reachable from other machines.
 
 ### Linux
 
@@ -65,7 +65,7 @@ cd dashboardagent
 docker compose -f docker-compose.windows.yml up -d --build
 ```
 
-Open http://127.0.0.1:5173. If your Claude/Cursor/opencode data lives somewhere else, edit the volume paths in `docker-compose.windows.yml` (use forward slashes, e.g. `C:/Users/you/.claude/projects`).
+Open http://127.0.0.1:5190. If your Claude/Cursor/opencode data lives somewhere else, edit the volume paths in `docker-compose.windows.yml` (use forward slashes, e.g. `C:/Users/you/.claude/projects`).
 
 ### Native (no Docker) on Linux / Windows
 
@@ -100,7 +100,7 @@ cd dashboardagent
 powershell -ExecutionPolicy Bypass -File start.ps1   # Windows
 ```
 
-Open http://127.0.0.1:5173
+Open http://127.0.0.1:5190
 
 Node 24+ is required because `node:sqlite` is used to read the opencode database.
 
@@ -108,7 +108,7 @@ Node 24+ is required because `node:sqlite` is used to read the opencode database
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `5173` | HTTP port |
+| `PORT` | `5190` | HTTP port |
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to expose on the network) |
 | `WINDOW_MIN` | `1440` (24 hours) | Sessions older than this are hidden |
 | `CLAUDE_DIR` | `~/.claude/projects` | Claude Code data folder |
@@ -147,7 +147,7 @@ In project mode (`orchestrator/`), each role (PM, BA, SA, Programmer, QA) can pi
 Any tool that can make an HTTP request can show up on the dashboard — a cron job, a CI pipeline, a Telegram bot, a Python/Node script, etc. Just `POST` a small JSON payload to `/api/events` every time the agent changes state.
 
 ```bash
-curl -X POST http://127.0.0.1:5173/api/events \
+curl -X POST http://127.0.0.1:5190/api/events \
   -H 'content-type: application/json' \
   -d '{
     "source": "mybot",
@@ -177,12 +177,12 @@ The agent is identified by `source:agent`, so **reuse the same values** on every
 Minimal example (report "done" and hide the agent):
 
 ```bash
-curl -X POST http://127.0.0.1:5173/api/events \
+curl -X POST http://127.0.0.1:5190/api/events \
   -H 'content-type: application/json' \
   -d '{"source":"mybot","agent":"Sari","status":"offline"}'
 ```
 
-> If the dashboard runs in Docker, `127.0.0.1:5173` works from the host machine. From another container, use `host.docker.internal:5173` instead.
+> If the dashboard runs in Docker, `127.0.0.1:5190` works from the host machine. From another container, use `host.docker.internal:5190` instead.
 
 ## Troubleshooting
 
@@ -215,12 +215,12 @@ Expected for the Grok Bot rows: the Grok Bot desktop app is macOS-only, so it ca
   ```
 - On native runs, confirm Node's version: `node --version` (must be v24 or newer).
 
-**Port 5173 is already in use**
+**Port 5190 is already in use**
 
 ```bash
-lsof -i:5173        # macOS/Linux
+lsof -i:5190        # macOS/Linux
 ```
-Stop the other process, or change the published port in `docker-compose.yml` (e.g. `"127.0.0.1:5273:5173"`).
+Stop the other process, or change the published port in `docker-compose.yml` (e.g. `"127.0.0.1:5273:5190"`).
 
 **I can't open it from another device on my network**
 

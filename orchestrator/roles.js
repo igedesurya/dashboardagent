@@ -151,6 +151,7 @@ function briefBlock(project, role) {
   lines.push(`- Tujuan / isi project: ${b.tujuan || '(belum diisi)'}`);
   if (b.jalankan) lines.push(`- Cara menjalankan: ${b.jalankan}`);
   if (b.uji) lines.push(`- Cara menguji: ${b.uji}`);
+  if (isSoftware(project) && !b.jalankan && !b.uji) lines.push('- Cara menjalankan dan menguji tidak diisi. Cari sendiri di README, package.json, Makefile, atau skrip yang sudah ada. Jangan tanyakan ini ke pengguna kecuali benar-benar tidak ketemu.');
   if (b.aturan) lines.push(`- Aturan/konvensi: ${b.aturan}`);
   lines.push('- Jangan menjelajah di luar folder project dan folder kerjamu. Data orchestrator (~/.agent-hq) dan project lain bukan urusanmu dan aksesnya ditolak.');
   if (!isSoftware(project)) {

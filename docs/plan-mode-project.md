@@ -271,7 +271,7 @@ Selesai dan diuji ujung ke ujung dengan ketiga engine (Claude Code, opencode, Cu
 - Pertanyaan bersifat tidak-menahan: `tanya_pengguna` langsung kembali, PM mengakhiri giliran, dan jawaban dikirim sebagai pesan berikutnya ke sesi yang sama.
 
 Catatan:
-- Ada server Vite proyek lain di `[::1]:5173`. Browser yang membuka `localhost:5173` bisa mendarat di sana; buka dashboard lewat `http://127.0.0.1:5173`.
+- Dashboard memakai port 5190 supaya tidak bentrok dengan Vite di 5173. Buka `http://127.0.0.1:5190`.
 - Orchestrator dipasang sebagai layanan login macOS dengan `orchestrator/install-launchd.sh` (sekali saja); `install-launchd.sh uninstall` untuk menghapus.
 
 ## Status Tahap 2
