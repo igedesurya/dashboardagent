@@ -6,13 +6,11 @@ const LS_KEY = 'agent-hq-mode';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const hhmm = (ts) => new Date(ts).toTimeString().slice(0, 5);
-const ROLE_LABEL = { worker: 'Kerja', pm: 'PM', ba: 'BA', sa: 'SA', dev: 'Programmer', qa: 'QA', user: '', system: '' };
-const ROLE_COLOR = { worker: '#9b6bff', pm: '#d97757', ba: '#1fa774', sa: '#4f8cff', dev: '#9b6bff', qa: '#f2a20c' };
+const ROLE_LABEL = { worker: 'Kerja', qa: 'QA', user: '', system: '' };
+const ROLE_COLOR = { worker: '#9b6bff', qa: '#f2a20c' };
 const ENGINE_ORDER = ['claude', 'opencode', 'cursor', 'gemini'];
 const WAITING_YOU = 'menunggu jawabanmu';
-const WORK_ST = new Set(['dikerjakan', 'review_kode', 'perbaikan', 'run_aplikasi', 'testing']);
 const isWorking = (a) => a && !['idle', 'error'].includes(a.state) && a.task !== WAITING_YOU;
-const STATUS_COLOR = { butuh_keputusan: '#e5484d', testing: '#f2a20c', laporan: '#d97757', dikerjakan: '#9b6bff', review_kode: '#4f8cff', perbaikan: '#f2a20c', run_aplikasi: '#9b6bff', siap_qa: '#14b8c4', baru: '#8a8f98', tanya_pengguna: '#f2a20c', tunggu_klien: '#9b6bff', analisa_bisnis: '#1fa774', analisa_teknis: '#4f8cff', menunggu_persetujuan: '#e5484d', siap_dikerjakan: '#14b8c4', siap: '#14b8c4', selesai: '#1fa774', gagal: '#e5484d' };
 
 async function api(method, p, body) {
   const r = await fetch(ORCH + p, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -267,21 +265,16 @@ export function initProjectMode(hooks) {
       renderSop(body);
       return;
     }
-    if (tab === 'tickets') {
-      const open = new Set([...body.querySelectorAll('details[open]')].map((d) => d.dataset.tk));
-      body.innerHTML = snap.tickets.length ? [...snap.tickets].reverse().map((tk) => renderTicket(tk, open.has(tk.id))).join('') : `<div class="cp-empty"><p>${esc(t('proj.noTickets'))}</p></div>`;
-      return;
-    }
     const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
     const pendingIds = new Set(snap.pending.map((p) => p.id));
     // Keep half-typed answers and the caret across re-renders.
     const drafts = {};
-    for (const f of body.querySelectorAll('form.ans, form.rev')) drafts[f.dataset.q] = f.querySelector('textarea').value;
-    const focused = document.activeElement?.closest?.('form.ans, form.rev')?.dataset.q;
+    for (const f of body.querySelectorAll('form.ans')) drafts[f.dataset.q] = f.querySelector('textarea').value;
+    const focused = document.activeElement?.closest?.('form.ans')?.dataset.q;
     const caret = focused ? document.activeElement.selectionStart : 0;
     body.innerHTML = snap.chat.length ? snap.chat.map((m) => renderMsg(m, pendingIds)).join('') : `<div class="cp-empty"><p>${esc(t('proj.hello'))}</p></div>`;
     for (const a of working) body.innerHTML += `<div class="msg typing"><span class="who" style="color:${ROLE_COLOR[roleOf(a)]}">${esc(a.name)}</span><span>${esc(a.task || '…')}</span></div>`;
-    for (const f of body.querySelectorAll('form.ans, form.rev')) {
+    for (const f of body.querySelectorAll('form.ans')) {
       const ta = f.querySelector('textarea');
       if (drafts[f.dataset.q]) ta.value = drafts[f.dataset.q];
       if (f.dataset.q === focused) {
@@ -293,7 +286,7 @@ export function initProjectMode(hooks) {
     body.dataset.init = 1;
   }
 
-  // Chat, tickets, and permissions. Activity text is intentionally not part of this.
+  // Chat and permissions. Activity text is intentionally not part of this.
   let sopName = '';
   async function renderSop(body) {
     const loop = snap.loop || { playbooks: [], toolbox: [] };
@@ -349,9 +342,8 @@ export function initProjectMode(hooks) {
 
   function structureKey() {
     const chatSig = snap.chat.map((m) => `${m.id}:${m.answered ? 1 : 0}:${m.decision || ''}:${m.text?.length || 0}`).join(';');
-    const ticketSig = snap.tickets.map((t) => `${t.id}:${t.status}:${t.updated}:${t.holder || ''}:${t.docs?.length || 0}:${t.plan?.status || ''}:${t.work?.round || 0}`).join(';');
     const loop = snap.loop || { playbooks: [], toolbox: [] };
-    return [paintRev, tab, snap.project.name, snap.project.folders.length, snap.active, JSON.stringify(snap.paused || {}), snap.pending.map((p) => p.id).join(','), chatSig, ticketSig, loop.playbooks.join(','), loop.toolbox.join(',')].join('|');
+    return [paintRev, tab, snap.project.name, snap.project.folders.length, snap.active, JSON.stringify(snap.paused || {}), snap.pending.map((p) => p.id).join(','), chatSig, loop.playbooks.join(','), loop.toolbox.join(',')].join('|');
   }
   function activityKey(working) {
     return working.map((a) => `${a.id}:${a.task || ''}`).join('|');
@@ -375,31 +367,13 @@ export function initProjectMode(hooks) {
   function renderMsg(m, pendingIds) {
     const who = m.who || (ROLE_LABEL[m.from] ?? m.from);
     const time = `<time>${hhmm(m.t)}</time>`;
-    if (m.from === 'system' && m.kind === 'handoff') return `<div class="msg sys handoff">${time} <b style="color:${ROLE_COLOR[m.by]}">${esc(ROLE_LABEL[m.by])}</b> → <b style="color:${ROLE_COLOR[m.to]}">${esc(ROLE_LABEL[m.to])}</b> <span class="tkid">${esc(m.ticket)}</span> ${esc(m.text.replace(/^[^:]+:\s*/, ''))}</div>`;
     if (m.from === 'system' && m.kind === 'work') return `<div class="msg sys work">${time} 🛠️ ${md(m.text)}</div>`;
-    if (m.kind === 'escalation') {
-      const tk = snap.tickets.find((x) => x.id === m.ticket);
-      const open = !m.decision && tk?.status === 'butuh_keputusan';
-      const btns = open ? `<div class="perm-btns" data-esc="${esc(m.ticket)}"><button data-ed="more">${esc(t('esc.more'))}</button><button data-ed="accept">${esc(t('esc.accept'))}</button><button data-ed="stop" class="no">${esc(t('esc.stop'))}</button></div>` : '';
-      const done = m.decision ? `<div class="dec ${m.decision === 'stop' ? 'deny' : 'once'}">${esc(t('esc.done.' + m.decision))}</div>` : '';
-      return `<div class="msg card perm ${open ? 'open' : ''}"><div class="card-h">⏸️ <b>${esc(t(m.esc === 'qa' ? 'esc.titleQa' : 'esc.titleReview'))}</b> <span class="tkid">${esc(m.ticket)}</span>${time}</div><div class="plan-text">${md(m.text)}</div><small>${esc(t('esc.hint'))}</small>${btns}${done}</div>`;
-    }
     if (m.from === 'system') return `<div class="msg sys ${m.kind}">${time} ${md(m.text)}</div>`;
-    if (m.kind === 'qa') return `<div class="msg card qa ${m.pass ? 'pass' : 'fix'}"><div class="card-h">🧪 <b style="color:${ROLE_COLOR.qa}">${esc(who)}</b> ${esc(t(m.pass ? 'qa.pass' : 'qa.fail'))} <span class="tkid">${esc(m.ticket)}</span>${time}</div><div class="plan-text">${md(m.text)}</div></div>`;
-    if (m.kind === 'review') return `<div class="msg card review ${m.verdict}"><div class="card-h">🔍 <b style="color:${ROLE_COLOR.sa}">SA</b> ${esc(t(m.verdict === 'pass' ? 'review.pass' : 'review.fix'))} <span class="tkid">${esc(m.ticket)}</span>${time}</div>${md(m.text)}</div>`;
-    if (m.kind === 'approval') {
-      const tk = snap.tickets.find((x) => x.id === m.ticket);
-      const waiting = !m.decision && tk?.status === 'menunggu_persetujuan';
-      const done = m.decision ? `<div class="dec ${m.decision === 'approve' ? 'once' : 'deny'}">${esc(t('plan.done.' + m.decision))}${m.note ? ': ' + esc(m.note) : ''}</div>` : waiting ? '' : `<div class="dec">${esc(t('plan.superseded'))}</div>`;
-      const form = waiting
-        ? `<div class="plan-btns"><button class="primary" data-plan="approve" data-tk="${esc(m.ticket)}">✓ ${esc(t('plan.approve'))}</button></div><form class="rev" data-q="rev-${esc(m.id)}" data-tk="${esc(m.ticket)}"><textarea rows="2" placeholder="${esc(t('plan.revisePh'))}"></textarea><button>${esc(t('plan.revise'))}</button></form>`
-        : '';
-      return `<div class="msg card plan ${waiting ? 'open' : ''}"><div class="card-h">🧭 <b style="color:${ROLE_COLOR[m.from]}">${esc(who)}</b> ${esc(t('plan.asks'))} <span class="tkid">${esc(m.ticket)}</span>${time}</div><div class="plan-meta">👩‍💻 ${esc(t('plan.devs', { n: m.programmer }))} · 🧪 ${esc(t('plan.qas', { n: m.qa }))}</div><div class="plan-text">${md(m.text)}</div>${form}${done}</div>`;
-    }
+    if (m.kind === 'qa') return `<div class="msg card qa ${m.pass ? 'pass' : 'fix'}"><div class="card-h">🧪 <b style="color:${ROLE_COLOR.qa}">${esc(who)}</b> ${esc(t(m.pass ? 'qa.pass' : 'qa.fail'))}${time}</div><div class="plan-text">${md(m.text)}</div></div>`;
     if (m.from === 'user') return `<div class="msg me">${m.kind === 'answer' ? `<small>${esc(t('proj.answerTo', { q: m.question }))}</small>` : ''}${md(m.text)}${time}</div>`;
     if (m.kind === 'question') {
       const form = m.answered ? '' : `<form class="ans" data-q="${esc(m.question)}"><textarea rows="2" placeholder="${esc(t('proj.answerPh'))}"></textarea><button>${esc(t('proj.answer'))}</button></form>`;
-      return `<div class="msg card q ${m.answered ? 'done' : ''}"><div class="card-h">❓ <b style="color:${ROLE_COLOR[m.from]}">${esc(who)}</b> ${esc(t('proj.asks'))} ${m.ticket ? `<span class="tkid">${esc(m.ticket)}</span>` : ''}${time}</div>${md(m.text)}${form}</div>`;
+      return `<div class="msg card q ${m.answered ? 'done' : ''}"><div class="card-h">❓ <b style="color:${ROLE_COLOR[m.from]}">${esc(who)}</b> ${esc(t('proj.asks'))}${time}</div>${md(m.text)}${form}</div>`;
     }
     if (m.kind === 'permission') {
       const open = pendingIds.has(m.permission);
@@ -407,40 +381,15 @@ export function initProjectMode(hooks) {
       const btns = open ? `<div class="perm-btns" data-p="${esc(m.permission)}"><button data-d="once">${esc(t('perm.once'))}</button>${m.rememberable ? `<button data-d="always" title="${esc(t('perm.alwaysHint', { who }))}">${esc(t('perm.alwaysScoped', { who }))}</button>` : ''}<button data-d="deny" class="no">${esc(t('perm.deny'))}</button></div>` : '';
       return `<div class="msg card perm ${open ? 'open' : ''}"><div class="card-h">🔐 <b>${esc(who)}</b> ${esc(t('perm.asks'))}${time}</div><div>${esc(m.text)}</div><small>${esc(t('perm.reason'))}: ${esc(m.reason || '')}</small>${btns}${done}</div>`;
     }
-    if (m.kind === 'report') return `<div class="msg card rep"><div class="card-h">📋 <b>${esc(who)}</b> ${esc(t('proj.report'))} ${m.ticket ? `<span class="tkid">${esc(m.ticket)}</span>` : ''}${time}</div>${md(m.text)}</div>`;
-    return `<div class="msg them"><span class="who" style="color:${ROLE_COLOR[m.from] || '#d97757'}">${esc(who)}</span>${md(m.text)}${time}</div>`;
+    if (m.kind === 'report') return `<div class="msg card rep"><div class="card-h">📋 <b>${esc(who)}</b> ${esc(t('proj.report'))}${time}</div>${md(m.text)}</div>`;
+    return `<div class="msg them"><span class="who" style="color:${ROLE_COLOR[m.from] || '#9b6bff'}">${esc(who)}</span>${md(m.text)}${time}</div>`;
   }
 
   function roleOf(a) {
     return a.id.split(':')[2];
   }
 
-  function renderTicket(tk, open) {
-    const holder = tk.holder === 'user' ? t('tk.holderYou') : ROLE_LABEL[tk.holder] || '';
-    const docs = (tk.docs || []).map((d) => `<div class="tk-doc"><b style="color:${ROLE_COLOR[d.role]}">${esc(ROLE_LABEL[d.role])}</b> · ${esc(t('doc.' + d.jenis))}<div>${md(d.isi)}</div></div>`).join('');
-    const plan = tk.plan ? `<div class="tk-doc"><b style="color:${ROLE_COLOR.sa}">SA</b> · ${esc(t('plan.title'))} (${esc(t('plan.st.' + tk.plan.status))}; ${esc(t('plan.devs', { n: tk.plan.programmer }))}, ${esc(t('plan.qas', { n: tk.plan.qa }))})<div>${md(tk.plan.text)}</div></div>` : '';
-    const w = tk.work;
-    const anyBusy = snap.agents.some((a) => roleOf(a) === 'dev' && isWorking(a) && a.project);
-    const work = w ? `<div class="tk-work">🌿 <code>ahq/${esc(tk.id)}</code> · ${w.repos.map((r) => esc(r.name)).join(', ')}<div class="devs">${Object.entries(w.devs).map(([n, d]) => `<span class="dev ${esc(d.status)}">P${esc(n)} · ${esc(t('dev.' + d.status))}</span>`).join('')}${Object.entries(w.qa || {}).map(([n, q]) => `<span class="dev qa-${esc(q.status)}">QA${esc(n)} · ${esc(t('qa.st.' + q.status))}</span>`).join('')}</div>${WORK_ST.has(tk.status) && !anyBusy ? `<button class="resume" data-resume="${esc(tk.id)}">▶ ${esc(t('tk.resume'))}</button>` : ''}</div>` : '';
-    const more = docs || plan ? `<details data-tk="${esc(tk.id)}" ${open ? 'open' : ''}><summary>${esc(t('tk.docs', { n: (tk.docs || []).length + (tk.plan ? 1 : 0) }))}</summary>${docs}${plan}</details>` : '';
-    return `<div class="tk"><div class="tk-top"><b>${esc(tk.id)}</b><span class="pill" style="--c:${STATUS_COLOR[tk.status] || '#8a8f98'}">${esc(t('tk.' + tk.status))}</span>${holder ? `<span class="holder" style="--c:${ROLE_COLOR[tk.holder] || '#e5484d'}">${esc(holder)}</span>` : ''}<small>${esc(t('tk.type.' + tk.jenis))}</small></div><div class="tk-title">${esc(tk.judul)}</div><div class="tk-sum">${esc(String(tk.ringkasan).slice(0, 220))}</div>${work}${more}</div>`;
-  }
-
   chat.addEventListener('submit', async (e) => {
-    const rev = e.target.closest('form.rev');
-    if (rev) {
-      e.preventDefault();
-      const note = rev.querySelector('textarea').value.trim();
-      if (!note) return alert(t('plan.needNote'));
-      rev.querySelector('button').disabled = true;
-      try {
-        await api('POST', `/api/projects/${projectId}/plan`, { ticket: rev.dataset.tk, decision: 'revise', note });
-      } catch (err) {
-        alert(err.message);
-        rev.querySelector('button').disabled = false;
-      }
-      return;
-    }
     const f = e.target.closest('form.ans');
     if (!f) return;
     e.preventDefault();
@@ -455,50 +404,6 @@ export function initProjectMode(hooks) {
     }
   });
   chat.addEventListener('click', async (e) => {
-    const ed = e.target.closest('[data-ed]');
-    if (ed) {
-      const box = ed.parentElement;
-      if (ed.dataset.ed === 'stop' && !confirm(t('esc.stopConfirm'))) return;
-      for (const x of box.querySelectorAll('button')) x.disabled = true;
-      try {
-        await api('POST', `/api/projects/${projectId}/decide`, { ticket: box.dataset.esc, decision: ed.dataset.ed });
-      } catch (err) {
-        alert(err.message);
-        for (const x of box.querySelectorAll('button')) x.disabled = false;
-      }
-      return;
-    }
-    const rs = e.target.closest('[data-resume]');
-    if (rs) {
-      rs.disabled = true;
-      try {
-        await api('POST', `/api/projects/${projectId}/resume`, { ticket: rs.dataset.resume });
-      } catch (err) {
-        alert(err.message);
-      }
-      return;
-    }
-    const ap = e.target.closest('[data-plan]');
-    if (ap) {
-      ap.disabled = true;
-      try {
-        await api('POST', `/api/projects/${projectId}/plan`, { ticket: ap.dataset.tk, decision: 'approve' });
-      } catch (err) {
-        if (err.status === 409 && err.data?.dirty) {
-          const list = err.data.dirty.map((d) => `• ${d.repo}: ${d.count} file (${d.sample.join(', ')}${d.count > d.sample.length ? ', …' : ''})`).join('\n');
-          if (confirm(t('plan.dirty', { list }))) {
-            try {
-              await api('POST', `/api/projects/${projectId}/plan`, { ticket: ap.dataset.tk, decision: 'approve', force: true });
-              return;
-            } catch (e2) {
-              alert(e2.message);
-            }
-          }
-        } else alert(err.message);
-        ap.disabled = false;
-      }
-      return;
-    }
     const b = e.target.closest('.perm-btns button');
     if (!b) return;
     const id = b.parentElement.dataset.p;

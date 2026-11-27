@@ -59,6 +59,22 @@ function rmStaysInside(cmd, writeRoots, cwd) {
   return true;
 }
 
+// New tasks stay on the branch the user already has open. Creating or switching a branch is refused.
+function branchMove(cmd) {
+  const parts = String(cmd).split(/&&|\|\||[|;\n]/);
+  for (const part of parts) {
+    if (!/\bgit\b/.test(part)) continue;
+    const body = part.replace(/^.*?\bgit\b/, 'git');
+    if (/\bcheckout\s+(?:-\S+\s+)*(-b|-B|--orphan)\b/.test(body)) return 'create';
+    if (/\bswitch\s+(?:-\S+\s+)*(-c|-C|--create)\b/.test(body)) return 'create';
+    if (/\bworktree\s+add\b/.test(body) && /\s(-b|-B)\b/.test(body)) return 'create';
+    if (/\bbranch\s+[^-]/.test(body) && !/\bbranch\s+(?:-\S+\s+)*(?:-d|-D|-m|-M|--list|--show-current|--contains|--merged|--no-merged|--points-at|--edit-description|--set-upstream-to|-u)\b/.test(body)) return 'create';
+    if (/\bswitch\b/.test(body) && !/\bswitch\s+(?:-\S+\s+)*(--list|-l)\b/.test(body) && /\bswitch\s+\S+/.test(body)) return 'switch';
+    if (/\bcheckout\s+[^-]/.test(body) && !/\s--\s/.test(body) && !/\bcheckout\s+\.(?:\s|$)/.test(body)) return 'switch';
+  }
+  return null;
+}
+
 // Read-only roles may run these without asking (when nothing sensitive is involved).
 const READONLY_CMDS = new Set(['ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'wc', 'pwd', 'tree', 'file', 'stat', 'du', 'echo', 'sort', 'uniq', 'cut', 'jq', 'which', 'date', 'basename', 'dirname', 'realpath', 'readlink', 'less', 'diff', 'cd', 'true']);
 const READONLY_GIT = new Set(['log', 'status', 'diff', 'show', 'branch', 'blame', 'ls-files', 'rev-parse', 'describe', 'shortlog', 'tag', 'grep']);
@@ -187,11 +203,11 @@ export function classify(req, ctx) {
       return ok('membaca');
     }
     case 'edit': {
-      if (ctx.readOnly) return deny('Mengubah file', 'Peran ini hanya membaca dan menganalisa. Perubahan kode dikerjakan Programmer setelah rencana SA disetujui pengguna.');
-      if (ctx.noEdit) return deny('Mengubah file', 'QA tidak mengubah kode. Laporkan temuanmu dengan lapor_uji; Programmer yang memperbaikinya.');
+      if (ctx.readOnly) return deny('Mengubah file', 'Sesi ini hanya membaca.');
+      if (ctx.noEdit) return deny('Mengubah file', 'QA tidak mengubah kode. Laporkan temuanmu dengan lapor_uji; sesi pengerjaan yang memperbaikinya.');
       for (const raw of req.paths || []) {
         const p = resolveP(raw, cwd);
-        // Programmers must never edit the user's own folder: point them at their worktree copy instead.
+      // Edits outside the session's write roots need approval. QA never edits.
         for (const m of ctx.mirrors || []) {
           if (isInside(p, [m.src])) {
             const dst = path.join(m.dst, path.relative(m.src, p));
@@ -206,10 +222,12 @@ export function classify(req, ctx) {
     }
     case 'shell': {
       const cmd = req.command || '';
-      // Programmers run commands in their worktree, never in the user's own folder.
+      // Commands that point at a mirrored folder are rejected. There are no mirrors in the two-session flow.
       for (const m of ctx.mirrors || []) {
         if (cmd.includes(m.src)) return deny(`Menjalankan di folder asli: ${clip(cmd, 80)}`, `Jangan menjalankan perintah di folder project asli pengguna. Pakai worktree-mu: ${m.dst}`);
       }
+      const moved = branchMove(cmd);
+      if (moved) return deny(`Git ${moved === 'create' ? 'membuat branch baru' : 'pindah branch'}: ${clip(cmd, 80)}`, 'Kerjakan di branch yang sudah terbuka. Jangan buat branch baru dan jangan pindah branch.');
       const exact = `shell:${cmd.trim().replace(/\s+/g, ' ').slice(0, 400)}`;
       for (const p of shellPaths(cmd, cwd)) {
         if (isForbidden(p, ctx)) return deny(`Menyentuh area terlarang: ${clip(cmd, 80)}`, FORBIDDEN_MSG);
@@ -217,7 +235,7 @@ export function classify(req, ctx) {
       for (const [re, why] of SENSITIVE_SHELL) {
         const m = cmd.match(re);
         if (m && re === RM_FORCE && !ctx.readOnly && rmStaysInside(cmd, ctx.writeRoots || [], cwd)) continue;
-        if (m && re === KILL && (ctx.readOnly || ctx.noEdit)) return deny(`Menghentikan proses: ${clip(cmd, 80)}`, 'Peran ini tidak boleh menghentikan proses. Kalau ada proses yang mengganggu, laporkan ke SA/PM.');
+        if (m && re === KILL && (ctx.readOnly || ctx.noEdit)) return deny(`Menghentikan proses: ${clip(cmd, 80)}`, 'Sesi ini tidak boleh menghentikan proses. Laporkan ke sesi pengerjaan.');
         if (m) return ask(`Menjalankan: ${clip(cmd, 90)}`, NEVER_REMEMBER.has(why) ? null : exact, why);
       }
       if (SECRET.test(cmd.replace(/\.env\.(example|sample|template)/g, ''))) return ask(`Menjalankan: ${clip(cmd, 90)}`, null, 'menyentuh file rahasia');

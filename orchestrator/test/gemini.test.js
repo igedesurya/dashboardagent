@@ -232,6 +232,12 @@ test('gemini policy end to end: readOnly/noEdit deny edit', () => {
   assert.equal(classify(edit, { ...ctx, noEdit: true }).decision, 'deny');
   assert.equal(classify(edit, ctx).decision, 'allow');
   assert.equal(classify(normalize('gemini', 'run_shell_command', { command: 'curl x' }), ctx).decision, 'ask');
+  for (const command of ['git checkout -b task', 'git switch -c task', 'git branch task', 'git -C /w checkout -b task', 'git checkout main', 'git switch main', 'npm test && git checkout -b task']) {
+    assert.equal(classify(normalize('claude', 'Bash', { command }), ctx).decision, 'deny', command);
+  }
+  for (const command of ['git status', 'git branch', 'git branch -v', 'git commit -m "x"', 'git checkout -- file.js', 'git checkout .']) {
+    assert.equal(classify(normalize('claude', 'Bash', { command }), ctx).decision, 'allow', command);
+  }
 });
 
 test('hook: allow, deny, fail closed', async () => {

@@ -6,7 +6,7 @@ import { postInternal } from './lib.js';
 import { toolsFor } from './roles.js';
 
 const PROJECT = process.env.AHQ_PROJECT;
-const ROLE = process.env.AHQ_ROLE || 'pm';
+const ROLE = process.env.AHQ_ROLE || 'worker';
 const INST = process.env.AHQ_INST || '';
 const ENGINE = process.env.AHQ_ENGINE || 'claude';
 const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
