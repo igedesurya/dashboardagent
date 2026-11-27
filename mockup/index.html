@@ -121,7 +121,7 @@
   .char-label.alert .bubble { background: #fff3d6; }
   .char-label.alert .bubble::after { border-top-color: #fff3d6; }
   @keyframes bob { 50% { transform: translateY(-3px); } }
-  .zone-label { font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: rgba(58,46,36,.75); background: rgba(255,255,255,.55); padding: 2px 8px; border-radius: 8px; white-space: nowrap; pointer-events: none; }
+  .zone-label { font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: #f8fafc; background: rgba(15,23,42,.72); border: 1px solid rgba(56,189,248,.35); padding: 2px 9px; border-radius: 8px; backdrop-filter: blur(4px); white-space: nowrap; pointer-events: none; }
 
   /* Saklar mode */
   .modebox { padding: 6px; display: flex; align-items: center; gap: 6px; position: static; }
@@ -340,10 +340,10 @@
       <button type="button" id="cpHide" data-i18n-title="proj.cardHide" data-i18n-aria="proj.cardHide" title="Sembunyikan" aria-label="Sembunyikan">✕</button>
     </div>
     <div class="cp-head"></div>
-    <div class="cp-tabs"><button data-tab="chat" class="on" data-i18n="proj.tabChat">Chat PM</button><button data-tab="sop" data-i18n="proj.tabSop">SOP</button><button data-tab="tickets" data-i18n="proj.tabTickets">Tiket</button></div>
+    <div class="cp-tabs"><button data-tab="chat" class="on" data-i18n="proj.tabChat">Chat</button><button data-tab="sop" data-i18n="proj.tabSop">SOP</button></div>
     <div class="cp-body"></div>
     <div class="cp-foot"><textarea id="cpInput" rows="2" data-i18n-aria="proj.inputPh"></textarea>
-      <div class="cp-actions"><button id="cpStop" hidden data-i18n="proj.stop">Hentikan</button><button id="cpSend" class="primary" data-i18n="proj.send">Kirim ke PM</button></div></div>
+      <div class="cp-actions"><button id="cpStop" hidden data-i18n="proj.stop">Hentikan</button><button id="cpSend" class="primary" data-i18n="proj.send">Kirim</button></div></div>
   </aside>
 
   <div id="projModal" hidden>
